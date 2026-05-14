@@ -113,13 +113,22 @@ Claude 会记录偏差、更新你的精力档案、可能解锁新成就。复�
 ### 对话示例
 
 ```
-用户：「帮我添加任务：XX前完成XX，适配XX，高优先级」
+用户：「帮我添加任务：周五前完成用户登录页响应式适配，适配手机和平板，高优先级的」
 AI ：「分析结果：
-      标题: XX | 🔴 高 | 预估 XX min | 截止 XX | 标签 coding·前端
-      📝 详情: XX
+      标题: 登录页响应式适配 | 🔴 高 | 预估 60 min | 截止 周五 18:00 | 标签 coding·前端
+      📝 详情: 适配手机和平板尺寸
       ✅ 创建吗？」
 用户：「确认」
-AI ：「已创建 ✅ XX [XXXXX]」
+AI ：「已创建 ✅ 登录页响应式适配 [a3f2b1]」
+
+用户：「帮我添加任务：抽空整理下这周会议纪要」
+AI ：「分析结果：
+      标题: 整理周会议纪要 | 🟢 低 | 预估 30 min | 标签 沟通·文档
+      ✅ 创建吗？」
+用户：「预估改 45 分钟吧」
+AI ：「已修正，确认：整理周会议纪要 | 🟢 低 | 预估 45 min | 标签 沟通·文档」
+用户：「确认」
+AI ：「已创建 ✅」
 
 用户：「帮我规划今天」
 AI ：「📅 今日规划 (09:00 - 18:00)
@@ -281,13 +290,22 @@ Claude records the deviation, updates your energy profile, and may unlock achiev
 ### Conversation example
 
 ```
-User: "Add a task: Complete XX adaptation by XX, high priority"
+User: "Add a task: Complete responsive login page adaptation for mobile and tablet by Friday, high priority"
 AI  : "Analysis:
-      Title: XX | 🔴 High | Est. XX min | Due XX | Tags coding·frontend
-      📝 Details: XX
+      Title: Login page responsive adaptation | 🔴 High | Est. 60 min | Due Fri 18:00 | Tags coding·frontend
+      📝 Details: Adapt for mobile and tablet screen sizes
       ✅ Create?"
 User: "Yes"
-AI  : "Created ✅ XX [XXXXX]"
+AI  : "Created ✅ Login page responsive adaptation [a3f2b1]"
+
+User: "Add a task: Organize this week's meeting notes when I have time"
+AI  : "Analysis:
+      Title: Organize weekly meeting notes | 🟢 Low | Est. 30 min | Tags communication·docs
+      ✅ Create?"
+User: "Change estimate to 45 min"
+AI  : "Updated. Confirm: Organize weekly meeting notes | 🟢 Low | Est. 45 min | Tags communication·docs"
+User: "Confirm"
+AI  : "Created ✅"
 
 User: "Plan my day"
 AI  : "📅 Today (09:00 - 18:00)
