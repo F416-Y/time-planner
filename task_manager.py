@@ -28,7 +28,7 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 TASKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.json")
 ENERGY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "energy_profile.json")
@@ -38,6 +38,9 @@ PRIORITY_WEIGHT = {"high": 3, "medium": 2, "low": 1}
 VALID_STATUSES = {"pending", "in_progress", "completed", "cancelled"}
 VALID_PRIORITIES = {"high", "medium", "low"}
 VALID_STYLES = {"strict", "encourage", "concise", "playful", "default"}
+VALID_ROUTINE_TYPES = {"daily", "weekly", "monthly"}
+VALID_ROUTINE_STATUSES = {"active", "paused"}
+ROUTINE_ID_PREFIX = "routine_"
 
 # Break phases: (name, ratio, verb)
 BREAK_PHASES = [
@@ -83,6 +86,124 @@ def save_tasks(tasks):
 
 def generate_id():
     return datetime.now().strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:6]
+
+
+def generate_routine_id():
+    return ROUTINE_ID_PREFIX + datetime.now().strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:6]
+
+
+def is_routine_applicable(routine_task, target_date):
+    """Check whether a routine task should appear on target_date.
+    routine_days uses 1=Mon..7=Sun. Python weekday() returns 0=Mon..6=Sun.
+    """
+    rtype = routine_task.get("routine_type", "daily")
+    if rtype == "daily":
+        return True
+    if rtype == "weekly":
+        py_weekday = target_date.weekday()
+        routine_weekday = py_weekday + 1
+        return routine_weekday in (routine_task.get("routine_days") or [])
+    if rtype == "monthly":
+        return True
+    return False
+
+
+def get_applicable_routines(tasks, profile, target_date=None):
+    """Return deviation-adjusted entries for all routines active today."""
+    if target_date is None:
+        target_date = date.today()
+
+    result = []
+    for t in tasks:
+        if t.get("type") != "routine" or t.get("status") != "active":
+            continue
+        if not is_routine_applicable(t, target_date):
+            continue
+
+        raw_est = t.get("estimated_minutes", 30)
+        adjusted = get_adjusted_minutes(t, profile)
+        deviation = round((adjusted / raw_est - 1), 4) if raw_est > 0 else 0
+
+        rt = t.get("routine_time") or "09:00"
+        try:
+            rt_h, rt_m = map(int, rt.split(":"))
+        except (ValueError, AttributeError):
+            rt_h, rt_m = 9, 0
+
+        result.append({
+            "task_id": t["id"],
+            "title": t["title"],
+            "priority": t.get("priority", "medium"),
+            "estimated_minutes": raw_est,
+            "adjusted_minutes": adjusted,
+            "deviation_applied": deviation,
+            "deadline": None,
+            "tags": t.get("tags", []),
+            "predicted_minutes": adjusted,
+            "procrastination_risk": "low",
+            "procrastination_score": 0,
+            "is_routine": True,
+            "routine_type": t.get("routine_type"),
+            "routine_time": rt,
+            "scheduled_start": rt_h * 60 + rt_m,
+        })
+
+    return result
+
+
+def merge_routines_into_plan(normal_entries, routine_entries, day_start, day_end, dynamic=False):
+    """Merge routine tasks into normal task plan, allocating sequential time blocks."""
+    try:
+        sh, sm = map(int, day_start.split(":"))
+        eh, em = map(int, day_end.split(":"))
+    except (ValueError, AttributeError):
+        sh, sm = 9, 0
+        eh, em = 18, 0
+    day_start_min = sh * 60 + sm
+    day_end_min = eh * 60 + em
+
+    # assign preliminary cursor positions to normal tasks
+    prelim_cursor = day_start_min
+    normal_with_pos = []
+    for at in normal_entries:
+        normal_with_pos.append((prelim_cursor, at))
+        prelim_cursor += at["adjusted_minutes"]
+
+    # collect all items with sort keys (position, type_priority, entry)
+    # type_priority: 0 = routine (prefer at same key), 1 = normal
+    all_items = []
+    for pos, at in normal_with_pos:
+        all_items.append((pos, 1, at))
+    for ra in routine_entries:
+        all_items.append((ra["scheduled_start"], 0, ra))
+
+    all_items.sort(key=lambda x: (x[0], x[1]))
+
+    cursor = day_start_min
+    plan = []
+    next_best = None
+
+    for _, _, entry in all_items:
+        dur = entry["adjusted_minutes"]
+        if cursor + dur > day_end_min:
+            if dynamic and next_best is None:
+                next_best = {
+                    "task_id": entry["task_id"],
+                    "title": entry["title"],
+                    "priority": entry["priority"],
+                    "adjusted_minutes": entry["adjusted_minutes"],
+                }
+            continue
+
+        start_str = f"{cursor // 60:02d}:{cursor % 60:02d}"
+        end_str = f"{(cursor + dur) // 60:02d}:{(cursor + dur) % 60:02d}"
+
+        entry_out = dict(entry)
+        entry_out["time"] = f"{start_str} - {end_str}"
+        plan.append(entry_out)
+        cursor += dur
+
+    return plan, next_best
 
 
 # ── energy profile data ────────────────────────────────────────────────────
@@ -630,10 +751,11 @@ def cmd_delete(args):
 def cmd_plan(args):
     tasks = load_tasks()
     profile = load_energy()
-    # exclude parent tasks that have been split into sub-tasks
+    # exclude parent tasks that have been split into sub-tasks, and routine tasks
     incomplete = [
         t for t in tasks
         if t["status"] not in ("completed", "cancelled")
+        and t.get("type") != "routine"
         and not t.get("has_subtasks", False)
     ]
 
@@ -647,10 +769,17 @@ def cmd_plan(args):
     for entry in adjusted_list:
         _annotate_boss_info(entry, boss_tasks)
 
+    # ── routine tasks ──
+    today = date.today()
+    routine_adjusted = get_applicable_routines(tasks, profile, today)
+    if routine_adjusted:
+        adjustment_active = True
+    routine_minutes = sum(r["adjusted_minutes"] for r in routine_adjusted)
+
     daily_limit_hours = profile.get("daily_limit_hours", 8.0)
     daily_limit_minutes = int(daily_limit_hours * 60)
 
-    # ── overload detection ──
+    # ── overload detection (routine tasks excluded from limit) ──
     if total_adjusted > daily_limit_minutes and not args.force:
         feasible = []
         overload = []
@@ -678,11 +807,17 @@ def cmd_plan(args):
         new_achs = check_achievements(ach_data, "overload", {"profile": profile, "tasks": tasks})
         save_achievements(ach_data)
 
+        # merge routines into feasible plan
+        combined_plan, plan_next_best = merge_routines_into_plan(
+            feasible, routine_adjusted, args.day_start, args.day_end, args.dynamic
+        )
+
         suggestion = (
             f"今日修正后总耗时 {total_adjusted} 分钟（{total_adjusted / 60:.1f} 小时），"
             f"超过每日上限 {daily_limit_minutes} 分钟（{daily_limit_hours} 小时）。"
             f"已按优先级为你筛选 {len(feasible)} 项可行任务（共 {cursor} 分钟），"
             f"{len(overload)} 项建议延迟到明天或拆分。"
+            f"另有 {len(routine_adjusted)} 项例行任务（{routine_minutes} 分钟）不受过载限制。"
             f"输入「确认」采纳此计划并生成时间块，或指定要调整的任务。"
         )
 
@@ -693,7 +828,9 @@ def cmd_plan(args):
             "daily_limit_hours": daily_limit_hours,
             "feasible_count": len(feasible),
             "overload_count": len(overload),
-            "feasible_plan": feasible,
+            "routine_count": len(routine_adjusted),
+            "routine_minutes": routine_minutes,
+            "feasible_plan": combined_plan,
             "overload_tasks": overload,
             "suggestion": suggestion,
         }
@@ -709,61 +846,20 @@ def cmd_plan(args):
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return
 
-    # ── normal plan (or forced) ──
-    try:
-        sh, sm = map(int, args.day_start.split(":"))
-        eh, em = map(int, args.day_end.split(":"))
-    except (ValueError, AttributeError):
-        print(json.dumps({"error": "时间格式无效，请使用 HH:MM 格式（如 09:00）"}, ensure_ascii=False))
-        sys.exit(1)
+    # ── normal plan (or forced) with routines merged ──
+    combined_plan, next_best = merge_routines_into_plan(
+        adjusted_list, routine_adjusted, args.day_start, args.day_end, args.dynamic
+    )
 
-    plan = []
-    cursor = sh * 60 + sm
-    next_best = None
-
-    for at in adjusted_list:
-        dur = at["adjusted_minutes"]
-        if cursor + dur > eh * 60 + em:
-            if args.dynamic and next_best is None:
-                next_best = {
-                    "task_id": at["task_id"],
-                    "title": at["title"],
-                    "priority": at["priority"],
-                    "adjusted_minutes": at["adjusted_minutes"],
-                }
-            continue
-
-        start_str = f"{cursor // 60:02d}:{cursor % 60:02d}"
-        end_str = f"{(cursor + dur) // 60:02d}:{(cursor + dur) % 60:02d}"
-        entry = {
-            "time": f"{start_str} - {end_str}",
-            "task_id": at["task_id"],
-            "title": at["title"],
-            "priority": at["priority"],
-            "estimated_minutes": at["estimated_minutes"],
-            "adjusted_minutes": at["adjusted_minutes"],
-            "deviation_applied": at["deviation_applied"],
-            "deadline": at["deadline"],
-            "predicted_minutes": at["predicted_minutes"],
-            "procrastination_risk": at["procrastination_risk"],
-            "procrastination_score": at["procrastination_score"],
-        }
-        if at.get("is_boss"):
-            entry["is_boss"] = True
-            entry["boss_blocks_tasks"] = at["boss_blocks_tasks"]
-            entry["boss_critical_count"] = at["boss_critical_count"]
-        if at.get("blocked_by_boss"):
-            entry["blocked_by_boss"] = at["blocked_by_boss"]
-            entry["blocked_by_boss_title"] = at["blocked_by_boss_title"]
-        plan.append(entry)
-        cursor += dur
+    normal_count = sum(1 for e in combined_plan if not e.get("is_routine"))
 
     output = {
         "day_range": f"{args.day_start} - {args.day_end}",
-        "planned_count": len(plan),
-        "remaining_tasks": len(adjusted_list) - len(plan),
+        "planned_count": len(combined_plan),
+        "remaining_tasks": len(adjusted_list) - normal_count,
+        "routine_count": sum(1 for e in combined_plan if e.get("is_routine")),
         "energy_adjustment_active": adjustment_active,
-        "plan": plan,
+        "plan": combined_plan,
     }
     if args.force:
         output["forced"] = True
@@ -1327,6 +1423,192 @@ def cmd_achievements(args):
     }, ensure_ascii=False, indent=2))
 
 
+# ── Module 十四: routine ────────────────────────────────────────────────────
+
+def cmd_routine(args):
+    """Dispatch routine sub-actions: add, list, done, log, pause, resume."""
+    action = args.action
+    if action == "add":
+        cmd_routine_add(args)
+    elif action == "list":
+        cmd_routine_list(args)
+    elif action == "done":
+        cmd_routine_done(args)
+    elif action == "log":
+        cmd_routine_log(args)
+    elif action == "pause":
+        cmd_routine_pause(args)
+    elif action == "resume":
+        cmd_routine_resume(args)
+
+
+def cmd_routine_add(args):
+    tasks = load_tasks()
+    now = datetime.now().isoformat()
+
+    if args.routine_type not in VALID_ROUTINE_TYPES:
+        print(json.dumps({"error": f"routine_type 必须是 {sorted(VALID_ROUTINE_TYPES)} 之一"}, ensure_ascii=False))
+        sys.exit(1)
+
+    routine_days = None
+    if args.routine_days:
+        try:
+            routine_days = [int(x.strip()) for x in args.routine_days.split(",")]
+            for d in routine_days:
+                if d < 1 or d > 7:
+                    raise ValueError(f"星期几必须在 1-7 之间，收到: {d}")
+        except ValueError as e:
+            print(json.dumps({"error": f"routine_days 格式错误: {e}。应为逗号分隔的数字 1-7 (1=周一)"}, ensure_ascii=False))
+            sys.exit(1)
+
+    if args.routine_type == "weekly" and not routine_days:
+        print(json.dumps({"error": "weekly 类型必须指定 --routine-days (逗号分隔的数字 1-7，1=周一)"}, ensure_ascii=False))
+        sys.exit(1)
+
+    task = {
+        "id": generate_routine_id(),
+        "title": args.title,
+        "type": "routine",
+        "routine_type": args.routine_type,
+        "routine_time": args.routine_time or "09:00",
+        "description": args.description or "",
+        "priority": args.priority or "medium",
+        "status": "active",
+        "estimated_minutes": args.estimated_minutes or 30,
+        "deadline": None,
+        "created_at": now,
+        "updated_at": now,
+        "tags": [t.strip() for t in args.tags.split(",")] if args.tags else [],
+        "completion_log": [],
+    }
+    if routine_days is not None:
+        task["routine_days"] = routine_days
+
+    tasks.append(task)
+    save_tasks(tasks)
+    print(json.dumps(task, ensure_ascii=False, indent=2))
+
+
+def cmd_routine_list(args):
+    tasks = load_tasks()
+    routines = [t for t in tasks if t.get("type") == "routine"]
+
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    first_of_month = today.replace(day=1)
+
+    result = []
+    for r in routines:
+        comp_log = r.get("completion_log") or []
+        this_week = sum(1 for c in comp_log if date.fromisoformat(c["date"]) >= monday)
+        this_month = sum(1 for c in comp_log if date.fromisoformat(c["date"]) >= first_of_month)
+
+        result.append({
+            "id": r["id"],
+            "title": r["title"],
+            "routine_type": r.get("routine_type"),
+            "routine_time": r.get("routine_time"),
+            "routine_days": r.get("routine_days"),
+            "status": r.get("status"),
+            "estimated_minutes": r.get("estimated_minutes", 30),
+            "tags": r.get("tags", []),
+            "this_week_count": this_week,
+            "this_month_count": this_month,
+            "total_count": len(comp_log),
+        })
+
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def cmd_routine_done(args):
+    tasks = load_tasks()
+    task = None
+    for t in tasks:
+        if t["id"] == args.task_id and t.get("type") == "routine":
+            task = t
+            break
+
+    if not task:
+        print(json.dumps({"error": f"例行任务 {args.task_id} 未找到"}, ensure_ascii=False))
+        sys.exit(1)
+
+    if task.get("status") != "active":
+        print(json.dumps({"error": "只能标记 active 状态的例行任务为完成"}, ensure_ascii=False))
+        sys.exit(1)
+
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M")
+    entry = {"date": today_str, "time": time_str}
+
+    task.setdefault("completion_log", []).append(entry)
+    task["updated_at"] = now.isoformat()
+    save_tasks(tasks)
+
+    print(json.dumps({
+        "task_id": task["id"],
+        "title": task["title"],
+        "completed_at": f"{today_str} {time_str}",
+        "completion_log": task["completion_log"],
+        "total_completions": len(task["completion_log"]),
+    }, ensure_ascii=False, indent=2))
+
+
+def cmd_routine_log(args):
+    tasks = load_tasks()
+    task = None
+    for t in tasks:
+        if t["id"] == args.task_id and t.get("type") == "routine":
+            task = t
+            break
+
+    if not task:
+        print(json.dumps({"error": f"例行任务 {args.task_id} 未找到"}, ensure_ascii=False))
+        sys.exit(1)
+
+    comp_log = task.get("completion_log") or []
+    print(json.dumps({
+        "task_id": task["id"],
+        "title": task["title"],
+        "routine_type": task.get("routine_type"),
+        "routine_time": task.get("routine_time"),
+        "total_completions": len(comp_log),
+        "completion_log": comp_log,
+    }, ensure_ascii=False, indent=2))
+
+
+def cmd_routine_pause(args):
+    tasks = load_tasks()
+    for t in tasks:
+        if t["id"] == args.task_id and t.get("type") == "routine":
+            if t.get("status") != "active":
+                print(json.dumps({"error": f"任务当前状态为 {t.get('status')}，无法暂停"}, ensure_ascii=False))
+                sys.exit(1)
+            t["status"] = "paused"
+            t["updated_at"] = datetime.now().isoformat()
+            save_tasks(tasks)
+            print(json.dumps({"task_id": t["id"], "title": t["title"], "status": "paused"}, ensure_ascii=False, indent=2))
+            return
+    print(json.dumps({"error": f"例行任务 {args.task_id} 未找到"}, ensure_ascii=False))
+    sys.exit(1)
+
+
+def cmd_routine_resume(args):
+    tasks = load_tasks()
+    for t in tasks:
+        if t["id"] == args.task_id and t.get("type") == "routine":
+            if t.get("status") != "paused":
+                print(json.dumps({"error": f"任务当前状态为 {t.get('status')}，无法恢复"}, ensure_ascii=False))
+                sys.exit(1)
+            t["status"] = "active"
+            t["updated_at"] = datetime.now().isoformat()
+            save_tasks(tasks)
+            print(json.dumps({"task_id": t["id"], "title": t["title"], "status": "active"}, ensure_ascii=False, indent=2))
+            return
+    print(json.dumps({"error": f"例行任务 {args.task_id} 未找到"}, ensure_ascii=False))
+    sys.exit(1)
+
+
 # ── Module 十三: export ──────────────────────────────────────────────────────
 
 def _check_docx():
@@ -1767,6 +2049,23 @@ def main():
     p_export.add_argument("--day-start", default=None, help="(仅 plan) 开始时间，如 09:00")
     p_export.add_argument("--day-end", default=None, help="(仅 plan) 结束时间，如 18:00")
 
+    # routine (Module 十四)
+    p_routine = sub.add_parser("routine", help="Manage routine/recurring tasks")
+    p_routine.add_argument("action", choices=["add", "list", "done", "log", "pause", "resume"],
+                           help="routine 子命令: add, list, done, log, pause, resume")
+    p_routine.add_argument("--title", default=None, help="Routine task title")
+    p_routine.add_argument("--description", default=None)
+    p_routine.add_argument("--routine-type", dest="routine_type", choices=sorted(VALID_ROUTINE_TYPES),
+                           default=None, help="Routine frequency: daily, weekly, monthly")
+    p_routine.add_argument("--routine-time", dest="routine_time", default=None,
+                           help="Suggested execution time (HH:MM)")
+    p_routine.add_argument("--routine-days", dest="routine_days", default=None,
+                           help="For weekly: comma-separated weekday numbers (1=Mon..7=Sun)")
+    p_routine.add_argument("--estimated-minutes", dest="estimated_minutes", type=int, default=None)
+    p_routine.add_argument("--priority", default="medium", choices=VALID_PRIORITIES)
+    p_routine.add_argument("--tags", default=None)
+    p_routine.add_argument("--task-id", dest="task_id", default=None, help="Routine task ID")
+
     args = parser.parse_args()
 
     cmds = {
@@ -1786,6 +2085,7 @@ def main():
         "stats": cmd_stats,
         "achievements": cmd_achievements,
         "export": cmd_export,
+        "routine": cmd_routine,
     }
     cmds[args.command](args)
 

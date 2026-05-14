@@ -9,7 +9,8 @@ description: >
   todo、待办事项、做计划、排期、今天做什么、帮我规划、时间块、time block、
   复盘、精力档案、偏差报告、过载、依赖、Boss任务、风格切换、
   预测、拖延风险、预警、拆分、子任务、统计、成就、战绩、
-  导出、导出计划、生成 word、导出清单、导出统计、导出成就、导出文档、分享、打印。
+  导出、导出计划、生成 word、导出清单、导出统计、导出成就、导出文档、分享、打印、
+  例行任务、daily、routine、打卡、重复任务、周期任务、每日任务、每周任务、暂停、恢复、习惯。
   即使用户只是说"帮我看看今天有什么任务"或"加一个待办"也应触发此 Skill。
 ---
 
@@ -188,7 +189,7 @@ description: >
   - 「现在、立刻、马上去做。别让我说第二遍。」
   - 「你很清楚自己在逃避什么。别再自欺欺人了。」
   - 「做不完就别睡觉。你自己选的。」
-- **表情**：完全不使用 emoji。
+- **表情**：可适当使用 😡 表达不满，其余 emoji 一律禁止。
 - **规划过载时**：劈头盖脸一顿训，然后直接扔出必须砍掉的任务清单，不给商量余地。
 - **完成任务时**：最多一句"还行"，立刻追问「下一个呢？」。绝不表扬——完成了是应该的。
 - **复盘偏差时**：嘲讽式回应，如「比你预估的多花了 XX 分钟。你什么时候才能认清自己？」
@@ -898,6 +899,102 @@ AI ：「已导出任务清单到 list_20260514_1530.docx，共 8 个未完成�
 
 ---
 
+### 模块十四：例行/重复任务（v3 新增）
+
+**触发词**：「加例行」「每日任务」「每天要做」「每周任务」「例行打卡」「routine add」「routine done」「重复任务」「暂停例行」「恢复例行」「打卡记录」
+
+为需要每天/每周/每月固定重复的任务提供自动化支持——一次设定，每日规划自动出现，打卡追踪完成历史。
+
+**子功能总览**：
+
+| 子功能 | 命令 | 说明 |
+|--------|------|------|
+| ① 添加例行 | `python task_manager.py routine add --title "..." --routine-type daily\|weekly\|monthly [options]` | 创建例行任务，自动生成 `routine_` 前缀 ID |
+| ② 列出例行 | `python task_manager.py routine list` | 查看所有例行任务及本周/本月/累计完成次数 |
+| ③ 打卡完成 | `python task_manager.py routine done --task-id <id>` | 记录本次完成，自动追加时间戳到 completion_log |
+| ④ 查看历史 | `python task_manager.py routine log --task-id <id>` | 查看该例行的全部完成记录 |
+| ⑤ 暂停/恢复 | `python task_manager.py routine pause\|resume --task-id <id>` | 暂停后该例行不再出现在每日规划中 |
+
+**① 添加例行任务**
+
+用户用自然语言描述想重复做的事，你自动分析频率（每天/每周几/每月）、建议时间、预估时长，提取后展示确认：
+
+**自动推断规则**：
+
+| 用户说 | 推断 |
+|--------|------|
+| 「每天」「每日」「早上」 | routine_type = `daily` |
+| 「每周」「周一三五」「每周二」 | routine_type = `weekly`，从中文周几推断 routine_days 数字（周一=1…周日=7） |
+| 「每月」「每个月」 | routine_type = `monthly` |
+| 「早上」「上午」「X点」 | routine_time = 对应 HH:00 |
+| 「10分钟」「半小时」 | estimated_minutes = 对应数值 |
+
+确认后执行：
+```bash
+python task_manager.py routine add \
+  --title "晨间冥想" \
+  --routine-type daily \
+  --routine-time "07:00" \
+  --estimated-minutes 10 \
+  --tags "健康"
+```
+
+例行任务与普通任务的关键区别：
+- ID 以 `routine_` 前缀开头
+- `status` 为 `active` 或 `paused`（而非 pending/completed）
+- 有 `completion_log` 数组追踪每次完成，不会因"完成"而消失
+
+**② 查看例行列表**
+```bash
+python task_manager.py routine list
+```
+展示每条例行任务的类型、建议时间、本周完成次数、本月完成次数、累计完成次数。
+
+**③ 打卡完成**
+
+当用户说「XX 做完了」「例行打卡」「今天做了XX」且匹配到例行任务时：
+```bash
+python task_manager.py routine done --task-id routine_20260514-abc123
+```
+自动用当前系统时间追加到 completion_log。
+
+**④ 查看打卡历史**
+```bash
+python task_manager.py routine log --task-id routine_20260514-abc123
+```
+展示完整 completion_log 数组和累计次数。
+
+**⑤ 暂停/恢复**
+
+当用户说「暂停XX例行」「这周先不做了」「恢复XX」时：
+```bash
+python task_manager.py routine pause --task-id <id>
+python task_manager.py routine resume --task-id <id>
+```
+暂停后该例行不再出现在每日规划中，恢复后重新出现。打卡记录保留不丢失。
+
+**Plan 自动集成**：
+
+生成每日规划时，系统自动查询所有 `status="active"` 的例行任务，筛选出今天应执行的（daily 全部、weekly 检查星期几、monthly 全部提示），插入到对应 `routine_time` 附近的时间块中。
+
+例行任务**参与偏差修正**（有对应标签历史偏差率时），但**不计入过载保护**的每日时长上限——它们是固定习惯，不是额外负担。过载时 feasible_plan 中仍包含例行任务。
+
+**对话示例**：
+```
+用户：「帮我加一个每天早上7点冥想10分钟的例行」
+AI ：「分析结果：
+      例行: 晨间冥想 | daily | 每天 07:00 | 预估 10 min | 标签 健康
+      ✅ 创建吗？」
+用户：「确认」
+AI ：「已创建例行 ✅ 晨间冥想 [routine_20260514-a3f2b1]」
+
+用户：「今天冥想做完了，打卡」
+AI ：「📝 例行打卡完成：晨间冥想 2026-05-14 07:05
+      本周第3次 | 本月第9次 | 累计 42次」
+```
+
+---
+
 ## 修改前确认规则（必须遵守）
 
 | 操作 | 确认要求 |
@@ -923,6 +1020,10 @@ AI ：「已导出任务清单到 list_20260514_1530.docx，共 8 个未完成�
 | `stats` | 无需确认，直接执行 |
 | `achievements` | 无需确认，直接执行 |
 | `export` | 无需确认，直接执行 |
+| `routine add` | 分析用户描述的频率/时间/预估，展示提取结果，用户确认后执行 |
+| `routine done` | 展示例行任务信息和打卡确认，用户确认后执行 |
+| `routine pause` / `routine resume` | 展示暂停/恢复确认，用户确认后执行 |
+| `routine list` / `routine log` | 无需确认，直接执行 |
 
 **确认方式**：列出将要变更的内容，询问「确认执行吗？」只有在用户明确同意后才执行脚本。不能跳过这一步。
 
@@ -957,6 +1058,11 @@ AI ：「已导出任务清单到 list_20260514_1530.docx，共 8 个未完成�
 | 「导出计划」「导出文档」「生成 word」「导出统计」 | 执行 `export` 导出为 .docx 文件 |
 | 「导出清单」「导出任务」 | 执行 `export list` 导出任务清单 |
 | 「导出成就」 | 执行 `export achievements` 导出成就清单 |
+| 「加一个每日任务」「添加例行」「每天要做」「routine add」 | 自动分析提取 routine_type/routine_time，确认后 routine add |
+| 「例行打卡」「routine done」「今天做了XX」 | 执行 routine done 记录完成 |
+| 「例行列表」「有哪些例行」「查看重复任务」 | 执行 routine list 查看所有例行任务 |
+| 「暂停 XX 例行」「恢复 XX」 | 执行 routine pause / routine resume |
+| 「XX 打卡记录」「查看完成历史」 | 执行 routine log 查看完成历史 |
 
 ---
 
