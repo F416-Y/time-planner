@@ -1,6 +1,6 @@
 {
   "daily_limit_hours": 8.0,
-  "style": "doubao",
+  "style": "default",
   "tag_profiles": {
     "演出/访谈": {
       "review_ids": [
