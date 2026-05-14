@@ -50,7 +50,7 @@
 
 1. 打开 [Claude.ai](https://claude.ai) → 进入 Skills 设置
 2. 将此仓库下载或克隆到 skills 目录
-3. 初始化你的个人数据文件
+3. 从 examples 目录复制示例数据文件并初始化
 4. 在任意对话中用自然语言触发即可
 
 或者直接用 Claude Code CLI：
@@ -181,7 +181,6 @@ time-planner/
 
 - 精力偏差档案需要累计至少 3 次复盘才开始有明显修正效果
 - `examples/` 目录下是虚构的示例数据，仅供参考数据结构
-- `tasks.json`、`energy_profile.json`、`achievements.json` 包含个人数据，已通过 `.gitignore` 排除
 - 默认语言：中文
 
 ---
@@ -358,7 +357,6 @@ time-planner/
 
 - Energy deviation profile needs at least 3 reviews before corrections become noticeable
 - `examples/` contains fictional sample data for reference only
-- `tasks.json`, `energy_profile.json`, `achievements.json` contain personal data and are excluded via `.gitignore`
 - Default language: Chinese
 
 ---
