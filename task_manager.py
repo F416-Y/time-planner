@@ -17,6 +17,7 @@ Usage:
   python task_manager.py break <task_id>
   python task_manager.py stats
   python task_manager.py achievements
+  python task_manager.py export <type> [--output <file.docx>] [--status ...]
 
 All commands output JSON to stdout. Errors go to stderr.
 """
@@ -64,9 +65,13 @@ ACHIEVEMENT_MAP = {a["id"]: a for a in ALL_ACHIEVEMENTS}
 def load_tasks():
     if not os.path.exists(TASKS_FILE):
         return []
-    with open(TASKS_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get("tasks", [])
+    try:
+        with open(TASKS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("tasks", [])
+    except (json.JSONDecodeError, IOError) as e:
+        print(json.dumps({"error": f"tasks.json 文件损坏或无法读取: {e}"}, ensure_ascii=False), file=sys.stderr)
+        sys.exit(1)
 
 
 def save_tasks(tasks):
@@ -94,8 +99,15 @@ def load_energy():
             "total_reviews": 0,
             "reviews": [],
         }
-    with open(ENERGY_FILE, "r", encoding="utf-8") as f:
-        profile = json.load(f)
+    try:
+        with open(ENERGY_FILE, "r", encoding="utf-8") as f:
+            profile = json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        print(json.dumps({"error": f"energy_profile.json 文件损坏或无法读取: {e}"}, ensure_ascii=False), file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(profile, dict):
+        print(json.dumps({"error": "energy_profile.json 格式错误，顶层应为对象"}, ensure_ascii=False), file=sys.stderr)
+        sys.exit(1)
     profile.setdefault("daily_limit_hours", 8.0)
     profile.setdefault("style", "default")
     profile.setdefault("global_avg_procrastination", 0.0)
@@ -153,8 +165,15 @@ def load_achievements():
                 "overload_trigger_count": 0,
             },
         }
-    with open(ACHIEVEMENTS_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(ACHIEVEMENTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        print(json.dumps({"error": f"achievements.json 文件损坏或无法读取: {e}"}, ensure_ascii=False), file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(data, dict):
+        print(json.dumps({"error": "achievements.json 格式错误，顶层应为对象"}, ensure_ascii=False), file=sys.stderr)
+        sys.exit(1)
     data.setdefault("achievements", [])
     data.setdefault("stats", {})
     data["stats"].setdefault("total_tasks_completed", 0)
@@ -492,7 +511,7 @@ def build_adjusted_task_list(tasks, profile, sort_by_priority=True):
     return result, total, adjustment_active
 
 
-def _annotate_boss_info(adjusted_entry, boss_tasks, block_index):
+def _annotate_boss_info(adjusted_entry, boss_tasks):
     """Annotate an adjusted_list entry with Boss task information."""
     tid = adjusted_entry["task_id"]
 
@@ -596,6 +615,14 @@ def cmd_delete(args):
     if len(new_tasks) == len(tasks):
         print(json.dumps({"error": f"task {args.task_id} not found"}, ensure_ascii=False))
         sys.exit(1)
+    # clean up dangling dependency references
+    for t in new_tasks:
+        deps = t.get("dependencies", [])
+        if args.task_id in deps:
+            t["dependencies"] = [d for d in deps if d != args.task_id]
+            if not t["dependencies"]:
+                del t["dependencies"]
+            t["updated_at"] = datetime.now().isoformat()
     save_tasks(new_tasks)
     print(json.dumps({"deleted": args.task_id}, ensure_ascii=False))
 
@@ -618,7 +645,7 @@ def cmd_plan(args):
     )
 
     for entry in adjusted_list:
-        _annotate_boss_info(entry, boss_tasks, 0)
+        _annotate_boss_info(entry, boss_tasks)
 
     daily_limit_hours = profile.get("daily_limit_hours", 8.0)
     daily_limit_minutes = int(daily_limit_hours * 60)
@@ -683,8 +710,12 @@ def cmd_plan(args):
         return
 
     # ── normal plan (or forced) ──
-    sh, sm = map(int, args.day_start.split(":"))
-    eh, em = map(int, args.day_end.split(":"))
+    try:
+        sh, sm = map(int, args.day_start.split(":"))
+        eh, em = map(int, args.day_end.split(":"))
+    except (ValueError, AttributeError):
+        print(json.dumps({"error": "时间格式无效，请使用 HH:MM 格式（如 09:00）"}, ensure_ascii=False))
+        sys.exit(1)
 
     plan = []
     cursor = sh * 60 + sm
@@ -825,7 +856,6 @@ def cmd_review(args):
 
     if profile["reviews"]:
         all_rates = [r["deviation_rate"] for r in profile["reviews"]]
-        all_proc = [task.get("procrastination_count", 0) for task in tasks if task["id"] == task.get("id")]
         profile["global_avg_deviation_rate"] = round(sum(all_rates) / len(all_rates), 4)
         # update global procrastination average
         all_tasks = load_tasks()
@@ -835,6 +865,16 @@ def cmd_review(args):
         profile["global_avg_deadline_adjusted"] = round(sum(dl_adj_vals) / max(len(dl_adj_vals), 1), 4)
 
     save_energy(profile)
+
+    # detect Boss tasks BEFORE status change
+    all_incomplete_before = [t for t in tasks if t["status"] not in ("completed", "cancelled")]
+    boss_tasks_before = find_boss_tasks(all_incomplete_before)
+    was_boss_before = task["id"] in boss_tasks_before
+
+    # guard against reviewing a parent task that has been split
+    if task.get("has_subtasks"):
+        print(json.dumps({"error": "该任务已拆分为子任务，请对子任务分别复盘"}, ensure_ascii=False))
+        sys.exit(1)
 
     # auto-complete task if not already completed
     was_completed = task["status"] in ("completed", "cancelled")
@@ -874,24 +914,6 @@ def cmd_review(args):
         today_str = date.today().isoformat()
         update_streak(ach_data, today_str)
 
-        # Check if the reviewed task was a Boss task
-        all_incomplete = [t for t in tasks if t["status"] not in ("completed", "cancelled")]
-        boss_tasks_now = find_boss_tasks(all_incomplete)
-        was_boss_before = False
-        # actually check if this task was a boss (blocker)
-        # we don't have the pre-review state, so we check: was this task blocking anyone?
-        for bt_id, bt_info in boss_tasks_now.items():
-            if bt_id == task["id"]:
-                was_boss_before = True
-                break
-        # Actually, if the task is now completed, it won't show up in find_boss_tasks
-        # We need to check differently. Let's check if any task had this as a dependency.
-        for t in tasks:
-            if args.task_id in t.get("dependencies", []):
-                was_boss_before = True
-                break
-        # But being a dependency doesn't mean it was a Boss. Let's just check
-        # if it had is_boss from the data perspective: check critical tasks blocked.
         if was_boss_before:
             stats["total_bosses_defeated"] += 1
 
@@ -1305,6 +1327,351 @@ def cmd_achievements(args):
     }, ensure_ascii=False, indent=2))
 
 
+# ── Module 十三: export ──────────────────────────────────────────────────────
+
+def _check_docx():
+    """Check python-docx is installed. Return the module or exit with hint."""
+    try:
+        import docx
+        return docx
+    except ImportError:
+        print(json.dumps({
+            "error": "python-docx 库未安装。请运行: pip install python-docx"
+        }, ensure_ascii=False))
+        sys.exit(1)
+
+
+def _generate_export_filename(prefix):
+    """Generate a timestamped .docx filename."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    return f"{prefix}_{ts}.docx"
+
+
+def _setup_doc(doc, title_text):
+    """Add title, generation date, and footer to a Document."""
+    from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    title = doc.add_heading(title_text, level=1)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    date_para = doc.add_paragraph()
+    date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = date_para.add_run(f"生成日期: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    run.font.size = Pt(9)
+    run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+    doc.add_paragraph()  # spacer
+
+    # footer
+    section = doc.sections[0]
+    footer = section.footer
+    footer.is_linked_to_previous = False
+    fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+    fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    fr = fp.add_run("Generated by Time Planner Skill")
+    fr.font.size = Pt(8)
+    fr.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+
+
+def _styled_table(doc, headers, rows, col_widths=None):
+    """Create a table with bold header row and grid style."""
+    table = doc.add_table(rows=1 + len(rows), cols=len(headers))
+    table.style = 'Table Grid'
+    for i, h in enumerate(headers):
+        cell = table.rows[0].cells[i]
+        cell.text = h
+        for p in cell.paragraphs:
+            for r in p.runs:
+                r.bold = True
+    for ri, row in enumerate(rows):
+        for ci, val in enumerate(row):
+            cell = table.rows[ri + 1].cells[ci]
+            cell.text = str(val)
+    if col_widths:
+        for ri, row in enumerate(table.rows):
+            for ci, w in enumerate(col_widths):
+                if ci < len(row.cells):
+                    row.cells[ci].width = w
+    return table
+
+
+def _export_plan(args):
+    """Export daily plan as a Word document with time-block table."""
+    from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    tasks = load_tasks()
+    profile = load_energy()
+    incomplete = [
+        t for t in tasks
+        if t["status"] not in ("completed", "cancelled")
+        and not t.get("has_subtasks", False)
+    ]
+    sorted_incomplete, cycle_detected = topological_sort(incomplete)
+    boss_tasks = find_boss_tasks(sorted_incomplete)
+    adjusted_list, total_adjusted, adjustment_active = build_adjusted_task_list(
+        sorted_incomplete, profile, sort_by_priority=False
+    )
+    for entry in adjusted_list:
+        _annotate_boss_info(entry, boss_tasks)
+
+    daily_limit_minutes = int(profile.get("daily_limit_hours", 8.0) * 60)
+    overload = total_adjusted > daily_limit_minutes
+
+    doc = _setup_doc_base()
+    _setup_doc(doc, "📅 每日时间规划")
+
+    # summary info
+    info_lines = [
+        f"规划日期: {datetime.now().strftime('%Y-%m-%d')}",
+        f"时间范围: {args.day_start or '09:00'} - {args.day_end or '18:00'}",
+        f"修正后总耗时: {total_adjusted} 分钟 ({total_adjusted / 60:.1f} 小时)",
+        f"每日上限: {daily_limit_minutes} 分钟 ({profile.get('daily_limit_hours', 8.0)} 小时)",
+    ]
+    if adjustment_active:
+        info_lines.append("⚠ 已启用精力偏差修正")
+    if cycle_detected:
+        info_lines.append("⚠ 检测到循环依赖，排序结果可能不完整")
+    if overload:
+        info_lines.append(f"⚠ 过载预警：总耗时超出每日上限")
+    for line in info_lines:
+        doc.add_paragraph(line)
+
+    # time block table
+    headers = ["时间段", "任务", "优先级", "预估", "修正后", "风险", "备注"]
+    rows = []
+    for at in adjusted_list:
+        remark = ""
+        if at.get("is_boss"):
+            remark = "🐉 Boss任务"
+        elif at.get("blocked_by_boss"):
+            remark = f"被Boss阻塞: {at.get('blocked_by_boss_title', '')}"
+        if at.get("procrastination_risk") == "high":
+            remark += " ⚡ 高风险"
+        row = [
+            at.get("time", ""),
+            at["title"],
+            at["priority"],
+            f"{at['estimated_minutes']}'",
+            f"{at['adjusted_minutes']}'",
+            at.get("procrastination_risk", "low"),
+            remark,
+        ]
+        rows.append(row)
+
+    # calculate time slots
+    sh, sm = 9, 0
+    eh, em = 18, 0
+    if args.day_start:
+        try:
+            sh, sm = map(int, args.day_start.split(":"))
+        except (ValueError, AttributeError):
+            pass
+    if args.day_end:
+        try:
+            eh, em = map(int, args.day_end.split(":"))
+        except (ValueError, AttributeError):
+            pass
+
+    cursor = sh * 60 + sm
+    day_end = eh * 60 + em
+    for i, at in enumerate(adjusted_list):
+        dur = at["adjusted_minutes"]
+        if cursor + dur > day_end:
+            break
+        start_str = f"{cursor // 60:02d}:{cursor % 60:02d}"
+        end_str = f"{(cursor + dur) // 60:02d}:{(cursor + dur) % 60:02d}"
+        rows[i][0] = f"{start_str} - {end_str}"
+        cursor += dur
+
+    table = _styled_table(doc, headers, rows)
+    # apply bold to Boss task rows
+    for ri, row_data in enumerate(rows):
+        if _has_boss(row_data):
+            for cell in table.rows[ri + 1].cells:
+                for p in cell.paragraphs:
+                    for r in p.runs:
+                        r.bold = True
+
+    if overload:
+        doc.add_paragraph()
+        warning = doc.add_paragraph()
+        wr = warning.add_run("⚠ 过载提醒：当前计划超出每日上限，建议优先完成排序靠前的任务。")
+        wr.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+
+    output = args.output or _generate_export_filename("plan")
+    doc.save(output)
+    print(json.dumps({"exported": output, "type": "plan"}, ensure_ascii=False))
+
+
+def _has_boss(row_data):
+    """Check if a plan row has Boss marking in remarks."""
+    return any("Boss任务" in str(c) for c in row_data)
+
+
+def _export_list(args):
+    """Export task list as a Word document."""
+    tasks = load_tasks()
+    if args.status:
+        tasks = [t for t in tasks if t["status"] == args.status]
+    else:
+        tasks = [t for t in tasks if t["status"] not in ("completed", "cancelled")]
+
+    tasks.sort(key=lambda t: (PRIORITY_WEIGHT.get(t["priority"], 1), t.get("deadline") or ""), reverse=True)
+
+    doc = _setup_doc_base()
+    _setup_doc(doc, "📋 任务清单")
+
+    doc.add_paragraph(f"共 {len(tasks)} 个任务")
+
+    headers = ["标题", "优先级", "状态", "预估(分钟)", "截止时间", "标签", "依赖数"]
+    rows = []
+    for t in tasks:
+        rows.append([
+            t["title"],
+            t["priority"],
+            t["status"],
+            str(t.get("estimated_minutes", 30)),
+            t.get("deadline") or "—",
+            ", ".join(t.get("tags", [])),
+            str(len(t.get("dependencies", []))),
+        ])
+    _styled_table(doc, headers, rows)
+
+    output = args.output or _generate_export_filename("list")
+    doc.save(output)
+    print(json.dumps({"exported": output, "type": "list", "count": len(tasks)}, ensure_ascii=False))
+
+
+def _export_stats(args):
+    """Export growth statistics report as a Word document."""
+    from docx.shared import Pt, RGBColor
+
+    ach_data = load_achievements()
+    stats = ach_data["stats"]
+    profile = load_energy()
+
+    doc = _setup_doc_base()
+    _setup_doc(doc, "📊 成长统计报告")
+
+    # overview
+    doc.add_heading("总览", level=2)
+    overview_headers = ["指标", "数值"]
+    overview_rows = [
+        ["累计完成任务", str(stats.get("total_tasks_completed", 0))],
+        ["Boss 击败数", str(stats.get("total_bosses_defeated", 0))],
+        ["当前连续天数", f"{stats.get('current_streak', 0)} 天"],
+        ["最长连续天数", f"{stats.get('longest_streak', 0)} 天"],
+        ["过载保护触发次数", str(stats.get("overload_trigger_count", 0))],
+        ["成就解锁数", f"{len(ach_data['achievements'])} / {len(ALL_ACHIEVEMENTS)}"],
+        ["总复盘次数", str(profile.get("total_reviews", 0))],
+    ]
+    _styled_table(doc, overview_headers, overview_rows)
+
+    # deviation summary
+    doc.add_heading("精力偏差分析", level=2)
+    global_rate = profile.get("global_avg_deviation_rate", 0.0)
+    sign = "+" if global_rate > 0 else ""
+    doc.add_paragraph(f"全局平均偏差率: {sign}{round(global_rate * 100, 1)}%")
+    doc.add_paragraph(f"全局平均拖延次数: {profile.get('global_avg_procrastination', 0.0)}")
+    doc.add_paragraph(f"全局平均改期次数: {profile.get('global_avg_deadline_adjusted', 0.0)}")
+
+    if profile.get("tag_profiles"):
+        doc.add_heading("标签偏差明细", level=3)
+        tag_headers = ["标签", "复盘次数", "平均偏差率", "平均拖延", "平均改期"]
+        tag_rows = []
+        for tag, tp in profile["tag_profiles"].items():
+            tag_rows.append([
+                tag,
+                str(tp.get("count", 0)),
+                f"{'+' if tp.get('avg_deviation_rate', 0) > 0 else ''}{round(tp.get('avg_deviation_rate', 0) * 100, 1)}%",
+                f"{tp.get('avg_procrastination_count', 0.0):.1f}",
+                f"{tp.get('avg_deadline_adjusted', 0.0):.1f}",
+            ])
+        _styled_table(doc, tag_headers, tag_rows)
+
+    # streak info
+    doc.add_heading("连续记录", level=2)
+    doc.add_paragraph(
+        f"最近完成任务日期: {stats.get('last_completed_date') or '—'}\n"
+        f"当前连续: {stats.get('current_streak', 0)} 天 | "
+        f"最长连续: {stats.get('longest_streak', 0)} 天"
+    )
+
+    output = args.output or _generate_export_filename("stats")
+    doc.save(output)
+    print(json.dumps({"exported": output, "type": "stats"}, ensure_ascii=False))
+
+
+def _export_achievements(args):
+    """Export achievements list as a Word document."""
+    from docx.shared import Pt, RGBColor
+
+    ach_data = load_achievements()
+    unlocked_ids = {a["id"] for a in ach_data["achievements"]}
+    unlocked_map = {a["id"]: a for a in ach_data["achievements"]}
+
+    doc = _setup_doc_base()
+    _setup_doc(doc, "🏆 成就清单")
+
+    unlocked_count = len(unlocked_ids)
+    total_count = len(ALL_ACHIEVEMENTS)
+    doc.add_paragraph(f"已解锁: {unlocked_count} / {total_count}")
+
+    headers = ["图标", "成就名称", "描述", "状态", "解锁时间"]
+    rows = []
+    for ach in ALL_ACHIEVEMENTS:
+        unlocked = ach["id"] in unlocked_ids
+        status_text = "✅ 已解锁" if unlocked else "🔒 未解锁"
+        unlocked_at = unlocked_map[ach["id"]].get("unlocked_at", "—") if unlocked else "—"
+        rows.append([
+            ach["icon"],
+            ach["name"],
+            ach["description"],
+            status_text,
+            unlocked_at,
+        ])
+
+    table = _styled_table(doc, headers, rows)
+    # color unlocked rows green, locked rows gray
+    from docx.shared import RGBColor
+    for ri, ach in enumerate(ALL_ACHIEVEMENTS):
+        unlocked = ach["id"] in unlocked_ids
+        color = RGBColor(0x00, 0x80, 0x00) if unlocked else RGBColor(0x99, 0x99, 0x99)
+        for cell in table.rows[ri + 1].cells:
+            for p in cell.paragraphs:
+                for r in p.runs:
+                    r.font.color.rgb = color
+
+    output = args.output or _generate_export_filename("achievements")
+    doc.save(output)
+    print(json.dumps({"exported": output, "type": "achievements"}, ensure_ascii=False))
+
+
+def _setup_doc_base():
+    """Create a bare Document for export (called before _setup_doc)."""
+    from docx import Document
+    return Document()
+
+
+def cmd_export(args):
+    """Export data to a Word (.docx) file."""
+    _check_docx()
+
+    if args.type == "plan":
+        _export_plan(args)
+    elif args.type == "list":
+        _export_list(args)
+    elif args.type == "stats":
+        _export_stats(args)
+    elif args.type == "achievements":
+        _export_achievements(args)
+    else:
+        print(json.dumps({"error": f"未知导出类型: {args.type}，可选: plan, list, stats, achievements"}, ensure_ascii=False))
+        sys.exit(1)
+
+
 # ── cli ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1390,6 +1757,16 @@ def main():
     # achievements (Module 十二)
     sub.add_parser("achievements", help="List all achievements with unlock status")
 
+    # export (Module 十三)
+    p_export = sub.add_parser("export", help="Export data to Word (.docx) file")
+    p_export.add_argument("type", choices=["plan", "list", "stats", "achievements"],
+                          help="导出类型: plan, list, stats, achievements")
+    p_export.add_argument("--output", default=None, help="输出文件路径 (默认自动生成时间戳文件名)")
+    p_export.add_argument("--status", choices=VALID_STATUSES, default=None,
+                          help="(仅 list) 按状态筛选任务")
+    p_export.add_argument("--day-start", default=None, help="(仅 plan) 开始时间，如 09:00")
+    p_export.add_argument("--day-end", default=None, help="(仅 plan) 结束时间，如 18:00")
+
     args = parser.parse_args()
 
     cmds = {
@@ -1408,6 +1785,7 @@ def main():
         "break": cmd_break,
         "stats": cmd_stats,
         "achievements": cmd_achievements,
+        "export": cmd_export,
     }
     cmds[args.command](args)
 
