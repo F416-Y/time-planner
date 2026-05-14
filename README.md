@@ -1,188 +1,167 @@
 # Time Planner
 
-个人时间规划助手 — 基于 Python CLI 的智能任务管理与每日时间规划工具。支持精力偏差修正、过载保护、Boss任务识别、拖延预警、任务拆分和游戏化成就系统。
+**用自然语言管理你的时间 — 像一个真正的私人助理。**
 
-## 功能清单
+你不需要记任何命令、不用学任何语法。对 AI 说出你想做什么，它就会帮你做好：添加任务、制定每日规划、追踪习惯、预测拖延风险……全部用对话完成。
 
-| 模块 | 功能 | 说明 |
-|------|------|------|
-| 一 | 添加任务 | 自动生成 ID，支持优先级、预估耗时、截止时间、标签 |
-| 二 | 列出任务 | 按状态/优先级过滤，自动排序展示 |
-| 三 | 修改任务 | 编辑标题、状态、优先级、截止时间等全部字段 |
-| 四 | 删除任务 | 指定 ID 删除，展示确认 |
-| 五 | 时间规划 | 自动生成今日时间块，拓扑排序 + 贪心选取 |
-| 六 | 复盘记录 | 记录实际耗时，自动计算偏差，更新精力档案 |
-| 七 | 精力档案 | 按标签查看历史偏差率，为修正提供数据基础 |
-| 八 | 过载保护 | 设置每日工作时长上限，超载时自动筛选可行任务 |
-| 九 | 依赖链 | 任务依赖关系管理，DFS 循环检测，Boss 任务自动识别 |
-| 十 | 智能预测 | 基于历史数据预测任务耗时、置信度和拖延风险（v2） |
-| 十一 | 任务拆分 | 大任务自动拆分为 4 阶段子任务，链式依赖（v2） |
-| 十二 | 成长追踪 | 7 项游戏化成就，连续天数追踪，统计面板（v2） |
+---
 
-## 对话风格
+## 它能听懂什么
 
-支持 5 种可切换的对话风格：
+你跟它说话就像跟一个私人时间教练聊天一样：
 
-| 风格 | 命令 | 说明 |
-|------|------|------|
-| `default` | `--set-style default` | 友好专业（默认） |
-| `strict` | `--set-style strict` | 严厉直接，铁血教练 |
-| `encourage` | `--set-style encourage` | 温暖共情，成长导师 |
-| `concise` | `--set-style concise` | 极简高效，纯数据 |
-| `playful` | `--set-style playful` | 游戏化冒险风格 |
+| 你想做的事 | 直接这样说 |
+|------------|------------|
+| 记一个待办 | 「帮我加一个任务，完成 Q2 报告，属于高优先级，预估 90 分钟，周五下班前截止，标签是工作、报告」 |
+| 看看今天有什么 | 「今天有什么任务」「列出所有高优先级的待办」 |
+| 更新任务状态 | 「Q2 报告做完了」「开始做用户认证的重构」 |
+| 制定今日计划 | 「帮我规划今天」「安排一下时间，我 10 点到 19 点有空」 |
+| 复盘实际耗时 | 「Q2 报告实际花了 2 小时」「复盘一下这个任务」 |
+| 设置每日上限 | 「我每天只工作 6 小时」「把每日上限改成 10 小时」 |
+| 管理任务依赖 | 「Q2 报告需要先完成数据收集才能开始」「查看谁在等这个任务」 |
+| 切换语气风格 | 「用严厉风格对我」「切换成游戏模式」「恢复默认风格」 |
+| 预测风险 | 「帮我预测一下这个任务会不会拖延」「扫描一下哪些任务有风险」 |
+| 拆分大任务 | 「这个任务太大了帮我拆开」「分解一下用户认证重构」 |
+| 查看统计数据 | 「看看我的数据」「我的成就解锁了哪些」 |
 
-## 快速开始
+---
 
-### 1. 初始化数据文件
+## 功能一览
 
-```bash
-cd time-planner/
+### 基础任务管理
+- **添加 / 查看 / 修改 / 删除** — 全部用自然语言操作，自动归类排序
 
-# 创建空的 tasks.json
-echo '{"tasks": []}' > tasks.json
+### 智能时间规划
+- 自动对未完成任务排序（优先级 + 截止时间 + 依赖关系）
+- 根据历史偏差率智能修正预估耗时
+- 生成带时间块的一日安排表
+- 任务太多时会提醒过载，帮你筛选最重要的
 
-# 创建空的 energy_profile.json
-cat > energy_profile.json << 'EOF'
-{
-  "daily_limit_hours": 8.0,
-  "style": "default",
-  "tag_profiles": {},
-  "global_avg_deviation_rate": 0.0,
-  "global_avg_procrastination": 0.0,
-  "global_avg_deadline_adjusted": 0.0,
-  "total_reviews": 0,
-  "reviews": []
-}
-EOF
+### 精力偏差档案
+- 每次复盘记录实际耗时 vs 预估耗时
+- 按标签自动计算偏差率，越用预测越准
+- 「coding 类的任务你通常会低估 40%」— 它会记住
 
-# 创建空的 achievements.json
-cat > achievements.json << 'EOF'
-{
-  "achievements": [],
-  "stats": {
-    "total_tasks_completed": 0,
-    "total_bosses_defeated": 0,
-    "current_streak": 0,
-    "longest_streak": 0,
-    "last_completed_date": null,
-    "overload_trigger_count": 0
-  }
-}
-EOF
+### 任务依赖与 Boss 任务
+- 设置任务先后顺序，自动检查循环依赖
+- 自动识别「Boss 任务」— 卡住后续关键工作的瓶颈
+- 优先安排 Boss 任务，让任务链顺畅推进
+
+### 智能预测与预警
+- 基于历史数据预测任务真实耗时和置信度
+- 评估每项任务的拖延风险评分
+- 全局扫描高风险任务，提前预警
+
+### 大任务自动拆分
+- 超过 120 分钟的任务一键拆成 4 个阶段：调研 → 整理 → 输出 → 检查
+- 子任务自动链式依赖，全部完成后父任务自动完成
+
+### 游戏化成长系统
+- **7 项成就**等你解锁：初次胜利、连续三日、Boss杀手、神射手、全勤一周、拒绝过载、偏差改善者
+- 连续天数追踪，自动记录最长连续记录
+
+### 5 种对话风格随时切换
+- `default` 友好专业 / `strict` 铁血教练 / `encourage` 温暖导师 / `concise` 极简高效 / `playful` 游戏冒险
+
+---
+
+## 安装与使用
+
+### 要用这个 skill，你需要：
+
+1. **安装 Claude Code**（[claude.ai/code](https://claude.ai/code)）并注册
+2. **克隆仓库到 skills 目录**：
+   ```bash
+   cd ~/.claude/skills/
+   git clone git@github.com:F416-Y/time-planner.git
+   ```
+3. **初始化你的数据文件**（这些文件存你的个人数据，不会上传）：
+   ```bash
+   cd time-planner
+   # 复制示例文件作为初始空数据
+   cp examples/tasks.example.json tasks.json
+   cp examples/energy_profile.example.json energy_profile.json
+   cp examples/achievements.example.json achievements.json
+   ```
+   > 复制后把文件里的示例数据清空，换成 `{"tasks": []}` 等空初始值即可。
+
+4. **开始对话** — 在 Claude Code 中输入：
+   ```
+   帮我添加第一个任务：试用 Time Planner，优先级中，预估 30 分钟
+   ```
+
+---
+
+## 对话示例
+
+```
+用户：帮我加一个任务，完成 Q2 报告，高优先级，60 分钟，
+      截止周五下午 6 点，标签工作、报告
+
+AI ：已帮你添加任务：
+     完成 Q2 报告 [a3f2b1]
+     优先级 🔴 高 | 预估 60 分钟 | 截止 05/16 18:00 | 标签 工作·报告
+     ✅ 确认创建
+
+
+用户：帮我规划今天，我 9 点到 6 点有空
+
+AI ：📅 今日时间规划 (09:00 - 18:00)
+
+     09:00 - 10:00  🐉 Boss任务 完成 Q2 报告 [a3f2b1] 预估60'
+     10:00 - 10:30  🟡 回复邮件 [b1c4d5] 预估30'
+     10:30 - 11:30  🔴 🔒被阻塞 准备演示 [e7f8a9] (等待: Q2报告)
+     ...
+
+
+用户：Q2 报告做完了，实际花了 85 分钟
+
+AI ：📊 复盘完成 [a3f2b1]
+     预估 60' → 实际 85' | 偏差 +25 分钟 (+41.7%)
+     已更新「工作」「报告」标签的偏差档案
+     🏆 新成就解锁：初次胜利！
+
+
+用户：这个任务太大了帮我拆一下
+
+AI ：✂️ 已将「重构用户认证模块」拆为 4 个子任务：
+     1. [调研] 48' | 2. [整理] 72' | 3. [输出] 96' | 4. [检查] 24'
+     子任务已按顺序链式依赖，完成后父任务自动完成。
 ```
 
-> 或者参考 `examples/` 目录下的示例文件，复制后去掉 `.example` 后缀即可使用。
-
-### 2. 添加第一个任务
-
-```bash
-python task_manager.py add --title "试用 Time Planner" --priority high --estimated-minutes 30 --tags "学习"
-```
-
-### 3. 生成今日规划
-
-```bash
-python task_manager.py plan --day-start 09:00 --day-end 18:00
-```
-
-## 命令参考
-
-### 任务管理
-```bash
-python task_manager.py add    --title "..." [--priority high|medium|low] [--estimated-minutes N] [--deadline "ISO时间"] [--tags "标签1,标签2"] [--description "..."]
-python task_manager.py list   [--status pending|in_progress|completed|cancelled] [--priority high|medium|low]
-python task_manager.py modify <task_id> [--title "..."] [--status ...] [--priority ...] [--deadline "..."] [--clear-deadline] [--tags "..."]
-python task_manager.py delete <task_id>
-```
-
-### 规划与复盘
-```bash
-python task_manager.py plan    [--day-start 09:00] [--day-end 18:00] [--force] [--dynamic]
-python task_manager.py review  <task_id> <actual_minutes>
-```
-
-### 依赖管理
-```bash
-python task_manager.py deps <task_id>              # 查看依赖关系
-python task_manager.py deps <task_id> --add <dep_id>    # 添加前置依赖
-python task_manager.py deps <task_id> --remove <dep_id> # 移除前置依赖
-```
-
-### 精力档案与设置
-```bash
-python task_manager.py energy                      # 查看精力偏差档案
-python task_manager.py limit                       # 查看每日工作时长上限
-python task_manager.py limit --set 6               # 设置每日上限为6小时
-python task_manager.py config                      # 查看当前配置
-python task_manager.py config --set-style playful  # 切换对话风格
-```
-
-### 预测与预警（v2）
-```bash
-python task_manager.py predict <task_id>           # 预测任务耗时和拖延风险
-python task_manager.py warn                        # 扫描所有任务中的高风险项
-```
-
-### 任务拆分（v2）
-```bash
-python task_manager.py break <task_id>             # 拆分超过120分钟的大任务
-```
-
-### 成长追踪（v2）
-```bash
-python task_manager.py stats                       # 查看累计统计数据
-python task_manager.py achievements                # 查看全部7项成就及解锁状态
-```
-
-## 数据结构
-
-详细的数据模型文档见 [skill.md](skill.md)。
-
-### 7 项游戏化成就
-
-| 成就 | 解锁条件 |
-|------|----------|
-| 🏆 初次胜利 | 完成第一个任务 |
-| 🔥 连续三日 | 连续 3 天有完成任务 |
-| ⚔️ Boss杀手 | 累计击败 5 个 Boss 任务 |
-| 🎯 神射手 | 复盘偏差率低于 10% |
-| ⭐ 全勤一周 | 连续 7 天有完成任务 |
-| 🛡️ 拒绝过载 | 累计触发 3 次过载保护 |
-| 📈 偏差改善者 | 近 7 天平均偏差率下降超过 20% |
+---
 
 ## 项目结构
 
 ```
 time-planner/
-├── task_manager.py          # 核心 CLI 脚本（15条命令）
-├── skill.md                 # AI Agent 技能定义文档
-├── .gitignore               # 隐私保护规则
-├── README.md                # 本文件
-├── examples/                # 示例数据文件（可安全上传）
-│   ├── tasks.example.json
-│   ├── energy_profile.example.json
-│   └── achievements.example.json
-├── tasks.json               # 个人任务数据（不追踪）
-├── energy_profile.json      # 精力偏差档案（不追踪）
-└── achievements.json        # 成就统计记录（不追踪）
+├── task_manager.py          # Python CLI 脚本，AI 在后台调用
+├── skill.md                 # AI 行为定义，告诉 AI 如何理解和响应用户
+├── examples/                # 空数据模板，复制后即可使用
+├── tasks.json               # 你的任务数据（不追踪，不上传）
+├── energy_profile.json      # 你的精力档案（不追踪，不上传）
+└── achievements.json        # 你的成就记录（不追踪，不上传）
 ```
 
-## 隐私提醒
+---
 
-**以下文件包含你的个人数据，已加入 `.gitignore`，永远不会被 Git 追踪：**
+## 技术概要
 
-| 文件 | 包含的私人信息 |
-|------|----------------|
-| `tasks.json` | 真实任务标题、描述、截止时间、优先级、标签 |
-| `energy_profile.json` | 个人精力偏差率、工作时长、复盘历史 |
-| `achievements.json` | 任务完成记录、成就解锁记录、连续天数 |
+底层是 Python 命令行工具，但**你不需要直接使用它**。Claude Code 作为 AI 层接收你的自然语言，自动翻译成对应的命令执行，并用人性化的方式呈现结果。
 
-如果你 fork 本项目后想要分享自己的使用体验，请确认上述文件没有被包含在你的公开仓库中。可以使用 `examples/` 目录下的示例文件代替。
+- Python 3.7+，零外部依赖（仅标准库）
+- 数据存储在本地 JSON 文件中
+- 完整命令参考见 [skill.md](skill.md)
 
-## 系统要求
+---
 
-- Python 3.7+
-- 无外部依赖（仅使用标准库）
+## 隐私说明
+
+`tasks.json`、`energy_profile.json`、`achievements.json` 三个文件包含你的个人任务、精力数据和成就记录。它们已在 `.gitignore` 中排除，不会被 Git 追踪和上传。
+
+**使用前请确认这三个文件不在你的公开仓库中。**
+
+---
 
 ## 许可
 
