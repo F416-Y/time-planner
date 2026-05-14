@@ -162,7 +162,6 @@ time-planner/
 
 ### 注意事项
 
-- 需要 Claude Pro / Team 账号才能使用 Skill
 - 精力偏差档案需要累计至少 3 次复盘才开始有明显修正效果
 - `examples/` 目录下是虚构的示例数据，仅供参考数据结构
 - `tasks.json`、`energy_profile.json`、`achievements.json` 包含个人数据，已通过 `.gitignore` 排除
