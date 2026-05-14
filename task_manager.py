@@ -1,0 +1,1416 @@
+#!/usr/bin/env python3
+"""Time Planner - Safe JSON task manager for the time-planner skill.
+
+Usage:
+  python task_manager.py add --title "..." [options]
+  python task_manager.py list [--status ...] [--priority ...]
+  python task_manager.py modify <id> [options]
+  python task_manager.py delete <id>
+  python task_manager.py plan [--day-start 09:00] [--day-end 18:00] [--force] [--dynamic]
+  python task_manager.py review <id> <actual_minutes>
+  python task_manager.py energy
+  python task_manager.py limit [--set <hours>]
+  python task_manager.py deps <id> [--add <dep_id>] [--remove <dep_id>]
+  python task_manager.py config [--set-style strict|encourage|concise|playful|default]
+  python task_manager.py predict <task_id>
+  python task_manager.py warn
+  python task_manager.py break <task_id>
+  python task_manager.py stats
+  python task_manager.py achievements
+
+All commands output JSON to stdout. Errors go to stderr.
+"""
+
+import argparse
+import heapq
+import json
+import os
+import sys
+import uuid
+from datetime import datetime, date
+
+TASKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.json")
+ENERGY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "energy_profile.json")
+ACHIEVEMENTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "achievements.json")
+
+PRIORITY_WEIGHT = {"high": 3, "medium": 2, "low": 1}
+VALID_STATUSES = {"pending", "in_progress", "completed", "cancelled"}
+VALID_PRIORITIES = {"high", "medium", "low"}
+VALID_STYLES = {"strict", "encourage", "concise", "playful", "default"}
+
+# Break phases: (name, ratio, verb)
+BREAK_PHASES = [
+    ("调研", 0.20, "research"),
+    ("整理", 0.30, "organize"),
+    ("输出", 0.40, "output"),
+    ("检查", 0.10, "review"),
+]
+
+ALL_ACHIEVEMENTS = [
+    {"id": "FIRST_VICTORY", "name": "初次胜利", "description": "完成第一个任务", "icon": "TROPHY"},
+    {"id": "STREAK_3", "name": "连续三日", "description": "连续3天有完成任务", "icon": "FIRE"},
+    {"id": "BOSS_KILLER", "name": "Boss杀手", "description": "击败5个Boss任务", "icon": "SWORD"},
+    {"id": "SHARPSHOOTER", "name": "神射手", "description": "复盘偏差率低于10%", "icon": "TARGET"},
+    {"id": "WEEK_FULL", "name": "全勤一周", "description": "连续7天有完成任务", "icon": "STAR"},
+    {"id": "OVERLOAD_REJECT", "name": "拒绝过载", "description": "累计3次触发过载保护", "icon": "SHIELD"},
+    {"id": "DEVIATION_IMPROVED", "name": "偏差改善者", "description": "近7天平均偏差率下降超过20%", "icon": "CHART"},
+]
+
+ACHIEVEMENT_MAP = {a["id"]: a for a in ALL_ACHIEVEMENTS}
+
+
+# ── task data ──────────────────────────────────────────────────────────────
+
+def load_tasks():
+    if not os.path.exists(TASKS_FILE):
+        return []
+    with open(TASKS_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("tasks", [])
+
+
+def save_tasks(tasks):
+    tmp = TASKS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"tasks": tasks}, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, TASKS_FILE)
+
+
+def generate_id():
+    return datetime.now().strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:6]
+
+
+# ── energy profile data ────────────────────────────────────────────────────
+
+def load_energy():
+    if not os.path.exists(ENERGY_FILE):
+        return {
+            "daily_limit_hours": 8.0,
+            "style": "default",
+            "tag_profiles": {},
+            "global_avg_deviation_rate": 0.0,
+            "global_avg_procrastination": 0.0,
+            "global_avg_deadline_adjusted": 0.0,
+            "total_reviews": 0,
+            "reviews": [],
+        }
+    with open(ENERGY_FILE, "r", encoding="utf-8") as f:
+        profile = json.load(f)
+    profile.setdefault("daily_limit_hours", 8.0)
+    profile.setdefault("style", "default")
+    profile.setdefault("global_avg_procrastination", 0.0)
+    profile.setdefault("global_avg_deadline_adjusted", 0.0)
+    # ensure every tag_profile has the new fields
+    for tp in profile.get("tag_profiles", {}).values():
+        tp.setdefault("avg_procrastination_count", 0.0)
+        tp.setdefault("avg_deadline_adjusted", 0.0)
+    return profile
+
+
+def save_energy(profile):
+    tmp = ENERGY_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(profile, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, ENERGY_FILE)
+
+
+def get_adjusted_minutes(task, profile):
+    """Return estimated_minutes corrected by historical deviation rates.
+    Priority: tag-specific avg > global avg > raw estimate. Capped at 120 min.
+    """
+    estimated = task.get("estimated_minutes", 30)
+    tags = task.get("tags", [])
+
+    if tags:
+        rates = []
+        for tag in tags:
+            tp = profile.get("tag_profiles", {}).get(tag)
+            if tp and tp.get("count", 0) > 0:
+                rates.append(tp["avg_deviation_rate"])
+        if rates:
+            avg_rate = sum(rates) / len(rates)
+            return min(max(5, round(estimated * (1 + avg_rate))), 120)
+
+    global_rate = profile.get("global_avg_deviation_rate", 0.0)
+    if global_rate:
+        return min(max(5, round(estimated * (1 + global_rate))), 120)
+
+    return estimated
+
+
+# ── achievements data ──────────────────────────────────────────────────────
+
+def load_achievements():
+    if not os.path.exists(ACHIEVEMENTS_FILE):
+        return {
+            "achievements": [],
+            "stats": {
+                "total_tasks_completed": 0,
+                "total_bosses_defeated": 0,
+                "current_streak": 0,
+                "longest_streak": 0,
+                "last_completed_date": None,
+                "overload_trigger_count": 0,
+            },
+        }
+    with open(ACHIEVEMENTS_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    data.setdefault("achievements", [])
+    data.setdefault("stats", {})
+    data["stats"].setdefault("total_tasks_completed", 0)
+    data["stats"].setdefault("total_bosses_defeated", 0)
+    data["stats"].setdefault("current_streak", 0)
+    data["stats"].setdefault("longest_streak", 0)
+    data["stats"].setdefault("last_completed_date", None)
+    data["stats"].setdefault("overload_trigger_count", 0)
+    return data
+
+
+def save_achievements(data):
+    tmp = ACHIEVEMENTS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, ACHIEVEMENTS_FILE)
+
+
+def update_streak(ach_data, today_str):
+    """Update streak counter based on today's completion."""
+    stats = ach_data["stats"]
+    last = stats["last_completed_date"]
+
+    if last is None:
+        stats["current_streak"] = 1
+        stats["longest_streak"] = 1
+    elif last == today_str:
+        pass  # already counted today
+    else:
+        try:
+            last_date = date.fromisoformat(last)
+            today_date = date.fromisoformat(today_str)
+            diff = (today_date - last_date).days
+        except (ValueError, TypeError):
+            diff = 999
+
+        if diff == 1:
+            stats["current_streak"] += 1
+        elif diff > 1:
+            stats["current_streak"] = 1
+        # diff < 0 shouldn't happen, but reset if it does
+        elif diff < 0:
+            stats["current_streak"] = 1
+
+        if stats["current_streak"] > stats["longest_streak"]:
+            stats["longest_streak"] = stats["current_streak"]
+
+    stats["last_completed_date"] = today_str
+
+
+def check_achievements(ach_data, trigger, context):
+    """Check for newly unlocked achievements. Returns list of newly unlocked."""
+    existing_ids = {a["id"] for a in ach_data["achievements"]}
+    stats = ach_data["stats"]
+    profile = context.get("profile", {})
+    new_achievements = []
+
+    def unlock(ach_id):
+        if ach_id not in existing_ids:
+            entry = {
+                **ACHIEVEMENT_MAP[ach_id],
+                "unlocked_at": datetime.now().isoformat(),
+            }
+            ach_data["achievements"].append(entry)
+            existing_ids.add(ach_id)
+            new_achievements.append(entry)
+
+    if trigger == "task_completed":
+        if stats["total_tasks_completed"] >= 1:
+            unlock("FIRST_VICTORY")
+        if stats["current_streak"] >= 3:
+            unlock("STREAK_3")
+        if stats["current_streak"] >= 7:
+            unlock("WEEK_FULL")
+
+    if trigger == "boss_defeated":
+        if stats["total_bosses_defeated"] >= 5:
+            unlock("BOSS_KILLER")
+
+    if trigger == "review":
+        review = context.get("review", {})
+        if abs(review.get("deviation_rate", 1.0)) < 0.10:
+            unlock("SHARPSHOOTER")
+
+        # deviation improved check
+        reviews = profile.get("reviews", [])
+        if len(reviews) >= 4:
+            recent_7d, older_7d = _split_reviews_by_window(reviews, 7)
+            if len(recent_7d) >= 2 and len(older_7d) >= 2:
+                recent_avg = sum(r["deviation_rate"] for r in recent_7d) / len(recent_7d)
+                older_avg = sum(r["deviation_rate"] for r in older_7d) / len(older_7d)
+                if older_avg > 0 and (older_avg - recent_avg) / older_avg > 0.20:
+                    unlock("DEVIATION_IMPROVED")
+
+    if trigger == "overload":
+        if stats.get("overload_trigger_count", 0) >= 3:
+            unlock("OVERLOAD_REJECT")
+
+    return new_achievements
+
+
+def _split_reviews_by_window(reviews, days):
+    """Split reviews into recent (within days) and older (days before that)."""
+    now_ts = datetime.now().timestamp()
+    cutoff = now_ts - days * 86400
+    older_cutoff_start = cutoff - days * 86400
+
+    recent = []
+    older = []
+    for r in reviews:
+        try:
+            rt = datetime.fromisoformat(r["reviewed_at"]).timestamp()
+        except (ValueError, KeyError):
+            continue
+        if rt >= cutoff:
+            recent.append(r)
+        elif rt >= older_cutoff_start:
+            older.append(r)
+
+    return recent, older
+
+
+# ── prediction helpers ─────────────────────────────────────────────────────
+
+def compute_prediction(task, profile):
+    """Compute predicted_minutes, confidence, and procrastination_risk for a task."""
+    estimated = task.get("estimated_minutes", 30)
+    adjusted = get_adjusted_minutes(task, profile)
+    deviation_rate = round((adjusted / estimated - 1), 4) if estimated > 0 else 0.0
+
+    tags = task.get("tags", [])
+    tag_profiles = profile.get("tag_profiles", {})
+
+    review_count = 0
+    proc_counts = []
+    for tag in tags:
+        tp = tag_profiles.get(tag)
+        if tp and tp.get("count", 0) > 0:
+            review_count += tp["count"]
+            proc_counts.append(tp.get("avg_procrastination_count", 0.0))
+
+    if review_count >= 10:
+        confidence = "high"
+    elif review_count >= 3:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    task_proc = task.get("procrastination_count", 0)
+    if proc_counts:
+        avg_proc = sum(proc_counts) / len(proc_counts)
+    else:
+        avg_proc = profile.get("global_avg_procrastination", 0.0)
+
+    combined_risk = round(avg_proc * 0.6 + task_proc * 0.4, 1)
+
+    if combined_risk >= 3:
+        procrastination_risk = "high"
+    elif combined_risk >= 1:
+        procrastination_risk = "medium"
+    else:
+        procrastination_risk = "low"
+
+    return {
+        "predicted_minutes": adjusted,
+        "deviation_rate": deviation_rate,
+        "confidence": confidence,
+        "procrastination_risk": procrastination_risk,
+        "procrastination_score": combined_risk,
+    }
+
+
+# ── dependency graph ───────────────────────────────────────────────────────
+
+def detect_cycle_path(tasks, task_id, dep_id):
+    """Check if adding dep_id as dependency of task_id would create a cycle.
+    Returns the cycle path (list of IDs) if found, None otherwise.
+    """
+    task_map = {t["id"]: t for t in tasks}
+
+    def dfs(current, path, visited):
+        if current == task_id:
+            return [task_id] + path + [task_id]
+        if current in visited:
+            return None
+        visited.add(current)
+        task = task_map.get(current)
+        if task:
+            for d in task.get("dependencies", []):
+                result = dfs(d, path + [current], visited)
+                if result:
+                    return result
+        return None
+
+    return dfs(dep_id, [], set())
+
+
+def topological_sort(tasks):
+    """Topological sort of tasks by their incomplete dependencies.
+    Uses priority + deadline for tie-breaking within same dependency level.
+    Returns (sorted_tasks, cycle_detected).
+    """
+    task_map = {t["id"]: t for t in tasks}
+    task_ids = set(task_map.keys())
+
+    in_degree = {tid: 0 for tid in task_ids}
+    dependents = {tid: [] for tid in task_ids}
+
+    for task in tasks:
+        for dep_id in task.get("dependencies", []):
+            if dep_id in task_ids:
+                in_degree[task["id"]] += 1
+                dependents[dep_id].append(task["id"])
+
+    heap = []
+    for tid, deg in in_degree.items():
+        if deg == 0:
+            t = task_map[tid]
+            pw = PRIORITY_WEIGHT.get(t["priority"], 1)
+            hd = 1 if t.get("deadline") else 0
+            heapq.heappush(heap, (-pw, -hd, t.get("deadline") or "", tid))
+
+    result = []
+    while heap:
+        _, _, _, tid = heapq.heappop(heap)
+        result.append(task_map[tid])
+        for dep_id in dependents[tid]:
+            in_degree[dep_id] -= 1
+            if in_degree[dep_id] == 0:
+                t = task_map[dep_id]
+                pw = PRIORITY_WEIGHT.get(t["priority"], 1)
+                hd = 1 if t.get("deadline") else 0
+                heapq.heappush(heap, (-pw, -hd, t.get("deadline") or "", dep_id))
+
+    if len(result) != len(tasks):
+        return tasks, True
+
+    return result, False
+
+
+def find_boss_tasks(incomplete_tasks):
+    """Find 'Boss tasks' - incomplete blockers that hold up critical work.
+
+    A blocker is a Boss task if it blocks at least one task that is:
+      - priority=high, OR
+      - has a deadline within 24 hours
+
+    Returns dict: blocker_id -> {blocker, blocks, critical_count}
+    """
+    task_map = {t["id"]: t for t in incomplete_tasks}
+    now = datetime.now()
+    deadline_24h = now.timestamp() + 24 * 3600
+
+    blocked_by = {}
+
+    for task in incomplete_tasks:
+        for dep_id in task.get("dependencies", []):
+            dep_task = task_map.get(dep_id)
+            if dep_task is None:
+                continue
+            is_critical = (
+                task["priority"] == "high"
+                or (
+                    task.get("deadline")
+                    and datetime.fromisoformat(task["deadline"]).timestamp() <= deadline_24h
+                )
+            )
+            entry = {
+                "task_id": task["id"],
+                "title": task["title"],
+                "priority": task["priority"],
+                "deadline": task.get("deadline"),
+                "is_critical": is_critical,
+            }
+            if dep_id not in blocked_by:
+                blocked_by[dep_id] = []
+            blocked_by[dep_id].append(entry)
+
+    boss_tasks = {}
+    for blocker_id, blocked_list in blocked_by.items():
+        critical_count = sum(1 for b in blocked_list if b["is_critical"])
+        if critical_count > 0:
+            boss_tasks[blocker_id] = {
+                "blocker": task_map[blocker_id],
+                "blocks": blocked_list,
+                "critical_count": critical_count,
+            }
+
+    return boss_tasks
+
+
+# ── build adjusted task list ───────────────────────────────────────────────
+
+def build_adjusted_task_list(tasks, profile, sort_by_priority=True):
+    """Apply deviation correction to all tasks.
+
+    Returns (adjusted_list, total_adjusted_minutes, adjustment_active).
+    """
+    if sort_by_priority:
+        def sort_key(t):
+            p = PRIORITY_WEIGHT.get(t["priority"], 1)
+            has_deadline = 1 if t.get("deadline") else 0
+            return (-p, -has_deadline, t.get("deadline") or "")
+        tasks = sorted(tasks, key=sort_key)
+
+    result = []
+    total = 0
+    adjustment_active = False
+
+    for task in tasks:
+        raw_est = task.get("estimated_minutes", 30)
+        adjusted = get_adjusted_minutes(task, profile)
+        deviation = round((adjusted / raw_est - 1), 4) if raw_est > 0 else 0
+        if deviation != 0:
+            adjustment_active = True
+
+        prediction = compute_prediction(task, profile)
+        entry = {
+            "task_id": task["id"],
+            "title": task["title"],
+            "priority": task["priority"],
+            "estimated_minutes": raw_est,
+            "adjusted_minutes": adjusted,
+            "deviation_applied": deviation,
+            "deadline": task.get("deadline"),
+            "tags": task.get("tags", []),
+            "predicted_minutes": prediction["predicted_minutes"],
+            "procrastination_risk": prediction["procrastination_risk"],
+            "procrastination_score": prediction["procrastination_score"],
+            "confidence": prediction["confidence"],
+        }
+        result.append(entry)
+        total += adjusted
+
+    return result, total, adjustment_active
+
+
+def _annotate_boss_info(adjusted_entry, boss_tasks, block_index):
+    """Annotate an adjusted_list entry with Boss task information."""
+    tid = adjusted_entry["task_id"]
+
+    if tid in boss_tasks:
+        bt = boss_tasks[tid]
+        adjusted_entry["is_boss"] = True
+        adjusted_entry["boss_blocks_tasks"] = bt["blocks"]
+        adjusted_entry["boss_critical_count"] = bt["critical_count"]
+
+    for blocker_id, bt in boss_tasks.items():
+        for blocked in bt["blocks"]:
+            if blocked["task_id"] == tid:
+                adjusted_entry["blocked_by_boss"] = blocker_id
+                adjusted_entry["blocked_by_boss_title"] = bt["blocker"]["title"]
+                break
+
+
+# ── commands ────────────────────────────────────────────────────────────────
+
+def cmd_add(args):
+    tasks = load_tasks()
+    now = datetime.now().isoformat()
+    task = {
+        "id": generate_id(),
+        "title": args.title,
+        "description": args.description or "",
+        "priority": args.priority,
+        "status": "pending",
+        "estimated_minutes": args.estimated_minutes,
+        "deadline": args.deadline,
+        "created_at": now,
+        "updated_at": now,
+        "tags": [t.strip() for t in args.tags.split(",")] if args.tags else [],
+    }
+    tasks.append(task)
+    save_tasks(tasks)
+    print(json.dumps(task, ensure_ascii=False, indent=2))
+
+
+def cmd_list(args):
+    tasks = load_tasks()
+    if args.status:
+        tasks = [t for t in tasks if t["status"] == args.status]
+    if args.priority:
+        tasks = [t for t in tasks if t["priority"] == args.priority]
+
+    def sort_key(t):
+        done = 1 if t["status"] in ("completed", "cancelled") else 0
+        p = PRIORITY_WEIGHT.get(t["priority"], 1)
+        return (done, -p, t.get("deadline") or "")
+
+    tasks.sort(key=sort_key)
+    print(json.dumps(tasks, ensure_ascii=False, indent=2))
+
+
+def cmd_modify(args):
+    tasks = load_tasks()
+    for t in tasks:
+        if t["id"] == args.task_id:
+            updates = {}
+            deadline_changed = False
+
+            if args.title is not None:
+                updates["title"] = args.title
+            if args.description is not None:
+                updates["description"] = args.description
+            if args.priority is not None:
+                updates["priority"] = args.priority
+            if args.status is not None:
+                updates["status"] = args.status
+            if args.estimated_minutes is not None:
+                updates["estimated_minutes"] = args.estimated_minutes
+            if args.deadline_flag:
+                deadline_changed = True
+                updates["deadline"] = None
+            elif hasattr(args, "deadline"):
+                deadline_changed = True
+                updates["deadline"] = args.deadline
+                current_deadline = t.get("deadline")
+                if current_deadline and current_deadline != args.deadline:
+                    updates["deadline_adjusted_count"] = t.get("deadline_adjusted_count", 0) + 1
+            if args.tags is not None:
+                updates["tags"] = [x.strip() for x in args.tags.split(",")] if args.tags else []
+
+            if not updates:
+                print(json.dumps({"error": "no fields to update"}, ensure_ascii=False))
+                sys.exit(1)
+
+            t.update(updates)
+            t["updated_at"] = datetime.now().isoformat()
+            save_tasks(tasks)
+            print(json.dumps(t, ensure_ascii=False, indent=2))
+            return
+    print(json.dumps({"error": f"task {args.task_id} not found"}, ensure_ascii=False))
+    sys.exit(1)
+
+
+def cmd_delete(args):
+    tasks = load_tasks()
+    new_tasks = [t for t in tasks if t["id"] != args.task_id]
+    if len(new_tasks) == len(tasks):
+        print(json.dumps({"error": f"task {args.task_id} not found"}, ensure_ascii=False))
+        sys.exit(1)
+    save_tasks(new_tasks)
+    print(json.dumps({"deleted": args.task_id}, ensure_ascii=False))
+
+
+def cmd_plan(args):
+    tasks = load_tasks()
+    profile = load_energy()
+    # exclude parent tasks that have been split into sub-tasks
+    incomplete = [
+        t for t in tasks
+        if t["status"] not in ("completed", "cancelled")
+        and not t.get("has_subtasks", False)
+    ]
+
+    sorted_incomplete, cycle_detected = topological_sort(incomplete)
+    boss_tasks = find_boss_tasks(sorted_incomplete)
+
+    adjusted_list, total_adjusted, adjustment_active = build_adjusted_task_list(
+        sorted_incomplete, profile, sort_by_priority=False
+    )
+
+    for entry in adjusted_list:
+        _annotate_boss_info(entry, boss_tasks, 0)
+
+    daily_limit_hours = profile.get("daily_limit_hours", 8.0)
+    daily_limit_minutes = int(daily_limit_hours * 60)
+
+    # ── overload detection ──
+    if total_adjusted > daily_limit_minutes and not args.force:
+        feasible = []
+        overload = []
+        cursor = 0
+        for at in adjusted_list:
+            if cursor + at["adjusted_minutes"] <= daily_limit_minutes:
+                feasible.append(at)
+                cursor += at["adjusted_minutes"]
+            else:
+                overload.append({**at, "reason": "超出每日上限"})
+
+        # increment procrastination_count for overloaded tasks
+        for ol in overload:
+            tid = ol["task_id"]
+            for t in tasks:
+                if t["id"] == tid:
+                    t["procrastination_count"] = t.get("procrastination_count", 0) + 1
+                    t["updated_at"] = datetime.now().isoformat()
+                    break
+        save_tasks(tasks)
+
+        # track overload trigger count and check achievements
+        ach_data = load_achievements()
+        ach_data["stats"]["overload_trigger_count"] = ach_data["stats"].get("overload_trigger_count", 0) + 1
+        new_achs = check_achievements(ach_data, "overload", {"profile": profile, "tasks": tasks})
+        save_achievements(ach_data)
+
+        suggestion = (
+            f"今日修正后总耗时 {total_adjusted} 分钟（{total_adjusted / 60:.1f} 小时），"
+            f"超过每日上限 {daily_limit_minutes} 分钟（{daily_limit_hours} 小时）。"
+            f"已按优先级为你筛选 {len(feasible)} 项可行任务（共 {cursor} 分钟），"
+            f"{len(overload)} 项建议延迟到明天或拆分。"
+            f"输入「确认」采纳此计划并生成时间块，或指定要调整的任务。"
+        )
+
+        output = {
+            "warning": "overload",
+            "total_adjusted_minutes": total_adjusted,
+            "daily_limit_minutes": daily_limit_minutes,
+            "daily_limit_hours": daily_limit_hours,
+            "feasible_count": len(feasible),
+            "overload_count": len(overload),
+            "feasible_plan": feasible,
+            "overload_tasks": overload,
+            "suggestion": suggestion,
+        }
+        if args.dynamic and overload:
+            output["next_best"] = overload[0]["task_id"]
+        if cycle_detected:
+            output["cycle_warning"] = "检测到循环依赖，已降级为原始排序，建议手动修复 tasks.json。"
+        if boss_tasks:
+            output["boss_tasks_detected"] = True
+            output["boss_task_ids"] = list(boss_tasks.keys())
+        if new_achs:
+            output["new_achievements"] = new_achs
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return
+
+    # ── normal plan (or forced) ──
+    sh, sm = map(int, args.day_start.split(":"))
+    eh, em = map(int, args.day_end.split(":"))
+
+    plan = []
+    cursor = sh * 60 + sm
+    next_best = None
+
+    for at in adjusted_list:
+        dur = at["adjusted_minutes"]
+        if cursor + dur > eh * 60 + em:
+            if args.dynamic and next_best is None:
+                next_best = {
+                    "task_id": at["task_id"],
+                    "title": at["title"],
+                    "priority": at["priority"],
+                    "adjusted_minutes": at["adjusted_minutes"],
+                }
+            continue
+
+        start_str = f"{cursor // 60:02d}:{cursor % 60:02d}"
+        end_str = f"{(cursor + dur) // 60:02d}:{(cursor + dur) % 60:02d}"
+        entry = {
+            "time": f"{start_str} - {end_str}",
+            "task_id": at["task_id"],
+            "title": at["title"],
+            "priority": at["priority"],
+            "estimated_minutes": at["estimated_minutes"],
+            "adjusted_minutes": at["adjusted_minutes"],
+            "deviation_applied": at["deviation_applied"],
+            "deadline": at["deadline"],
+            "predicted_minutes": at["predicted_minutes"],
+            "procrastination_risk": at["procrastination_risk"],
+            "procrastination_score": at["procrastination_score"],
+        }
+        if at.get("is_boss"):
+            entry["is_boss"] = True
+            entry["boss_blocks_tasks"] = at["boss_blocks_tasks"]
+            entry["boss_critical_count"] = at["boss_critical_count"]
+        if at.get("blocked_by_boss"):
+            entry["blocked_by_boss"] = at["blocked_by_boss"]
+            entry["blocked_by_boss_title"] = at["blocked_by_boss_title"]
+        plan.append(entry)
+        cursor += dur
+
+    output = {
+        "day_range": f"{args.day_start} - {args.day_end}",
+        "planned_count": len(plan),
+        "remaining_tasks": len(adjusted_list) - len(plan),
+        "energy_adjustment_active": adjustment_active,
+        "plan": plan,
+    }
+    if args.force:
+        output["forced"] = True
+    if args.dynamic and next_best:
+        output["next_best"] = next_best
+    if cycle_detected:
+        output["cycle_warning"] = "检测到循环依赖，已降级为原始排序，建议手动修复 tasks.json。"
+    if boss_tasks:
+        output["boss_tasks_detected"] = True
+        output["boss_task_ids"] = list(boss_tasks.keys())
+    print(json.dumps(output, ensure_ascii=False, indent=2))
+
+
+def cmd_review(args):
+    tasks = load_tasks()
+    task = None
+    for t in tasks:
+        if t["id"] == args.task_id:
+            task = t
+            break
+    if not task:
+        print(json.dumps({"error": f"task {args.task_id} not found"}, ensure_ascii=False))
+        sys.exit(1)
+
+    estimated = task.get("estimated_minutes", 30)
+    actual = args.actual_minutes
+    if actual <= 0:
+        print(json.dumps({"error": "actual_minutes must be > 0"}, ensure_ascii=False))
+        sys.exit(1)
+
+    deviation_minutes = actual - estimated
+    deviation_rate = round((actual - estimated) / estimated, 4)
+
+    profile = load_energy()
+
+    review = {
+        "id": "rev-" + generate_id(),
+        "task_id": task["id"],
+        "title": task["title"],
+        "tags": task.get("tags", []),
+        "estimated_minutes": estimated,
+        "actual_minutes": actual,
+        "deviation_minutes": deviation_minutes,
+        "deviation_rate": deviation_rate,
+        "reviewed_at": datetime.now().isoformat(),
+    }
+    profile["reviews"].append(review)
+    profile["total_reviews"] = len(profile["reviews"])
+
+    tags = task.get("tags", [])
+    if not tags:
+        tags = ["_untagged"]
+
+    tag_impacts = {}
+    for tag in tags:
+        if tag not in profile["tag_profiles"]:
+            profile["tag_profiles"][tag] = {
+                "review_ids": [],
+                "avg_deviation_rate": 0.0,
+                "count": 0,
+                "avg_procrastination_count": 0.0,
+                "avg_deadline_adjusted": 0.0,
+            }
+        tp = profile["tag_profiles"][tag]
+        tp.setdefault("avg_procrastination_count", 0.0)
+        tp.setdefault("avg_deadline_adjusted", 0.0)
+        tp["review_ids"].append(review["id"])
+        tp["count"] = len(tp["review_ids"])
+        rates = [
+            r["deviation_rate"]
+            for r in profile["reviews"]
+            if r["id"] in tp["review_ids"]
+        ]
+        tp["avg_deviation_rate"] = round(sum(rates) / len(rates), 4)
+
+        # also update procrastination/deadline_adjusted averages from the task
+        proc_count = task.get("procrastination_count", 0)
+        dl_adj_count = task.get("deadline_adjusted_count", 0)
+        # rolling average update
+        old_proc = tp["avg_procrastination_count"]
+        old_dl = tp["avg_deadline_adjusted"]
+        tp["avg_procrastination_count"] = round(
+            (old_proc * (tp["count"] - 1) + proc_count) / tp["count"], 4
+        )
+        tp["avg_deadline_adjusted"] = round(
+            (old_dl * (tp["count"] - 1) + dl_adj_count) / tp["count"], 4
+        )
+
+        tag_impacts[tag] = tp["avg_deviation_rate"]
+
+    if profile["reviews"]:
+        all_rates = [r["deviation_rate"] for r in profile["reviews"]]
+        all_proc = [task.get("procrastination_count", 0) for task in tasks if task["id"] == task.get("id")]
+        profile["global_avg_deviation_rate"] = round(sum(all_rates) / len(all_rates), 4)
+        # update global procrastination average
+        all_tasks = load_tasks()
+        proc_vals = [t.get("procrastination_count", 0) for t in all_tasks]
+        dl_adj_vals = [t.get("deadline_adjusted_count", 0) for t in all_tasks]
+        profile["global_avg_procrastination"] = round(sum(proc_vals) / max(len(proc_vals), 1), 4)
+        profile["global_avg_deadline_adjusted"] = round(sum(dl_adj_vals) / max(len(dl_adj_vals), 1), 4)
+
+    save_energy(profile)
+
+    # auto-complete task if not already completed
+    was_completed = task["status"] in ("completed", "cancelled")
+    if not was_completed:
+        task["status"] = "completed"
+        task["updated_at"] = datetime.now().isoformat()
+        is_parent = task.get("has_subtasks", False)
+        is_sub = task.get("parent_task_id") is not None
+
+        # check if all sub-tasks of parent are done → auto-complete parent
+        parent_auto_completed = None
+        if is_sub:
+            parent_id = task["parent_task_id"]
+            parent_task = None
+            for t in tasks:
+                if t["id"] == parent_id:
+                    parent_task = t
+                    break
+            if parent_task:
+                siblings = [t for t in tasks if t.get("parent_task_id") == parent_id]
+                all_done = all(s["status"] in ("completed", "cancelled") for s in siblings)
+                if all_done and parent_task["status"] not in ("completed", "cancelled"):
+                    parent_task["status"] = "completed"
+                    parent_task["updated_at"] = datetime.now().isoformat()
+                    parent_auto_completed = {
+                        "task_id": parent_task["id"],
+                        "title": parent_task["title"],
+                    }
+
+        save_tasks(tasks)
+
+        # ── achievements & streak ──
+        ach_data = load_achievements()
+        stats = ach_data["stats"]
+        stats["total_tasks_completed"] += 1
+
+        today_str = date.today().isoformat()
+        update_streak(ach_data, today_str)
+
+        # Check if the reviewed task was a Boss task
+        all_incomplete = [t for t in tasks if t["status"] not in ("completed", "cancelled")]
+        boss_tasks_now = find_boss_tasks(all_incomplete)
+        was_boss_before = False
+        # actually check if this task was a boss (blocker)
+        # we don't have the pre-review state, so we check: was this task blocking anyone?
+        for bt_id, bt_info in boss_tasks_now.items():
+            if bt_id == task["id"]:
+                was_boss_before = True
+                break
+        # Actually, if the task is now completed, it won't show up in find_boss_tasks
+        # We need to check differently. Let's check if any task had this as a dependency.
+        for t in tasks:
+            if args.task_id in t.get("dependencies", []):
+                was_boss_before = True
+                break
+        # But being a dependency doesn't mean it was a Boss. Let's just check
+        # if it had is_boss from the data perspective: check critical tasks blocked.
+        if was_boss_before:
+            stats["total_bosses_defeated"] += 1
+
+        context = {
+            "task": task,
+            "review": review,
+            "profile": profile,
+            "tasks": tasks,
+        }
+        new_achs = check_achievements(ach_data, "task_completed", context)
+        boss_achs = check_achievements(ach_data, "boss_defeated", context)
+        review_achs = check_achievements(ach_data, "review", context)
+        new_achs = new_achs + [a for a in boss_achs if a not in new_achs] + [a for a in review_achs if a not in new_achs]
+        save_achievements(ach_data)
+
+        sign = "+" if deviation_minutes > 0 else ""
+        result = {
+            "review": review,
+            "deviation_readable": f"{sign}{deviation_minutes} min ({sign}{round(deviation_rate * 100, 1)}%)",
+            "tag_impacts": tag_impacts,
+            "task_auto_completed": True,
+        }
+        if parent_auto_completed:
+            result["parent_auto_completed"] = parent_auto_completed
+        if new_achs:
+            result["new_achievements"] = new_achs
+        if was_boss_before:
+            result["boss_defeated"] = True
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    save_tasks(tasks)
+    sign = "+" if deviation_minutes > 0 else ""
+    print(json.dumps({
+        "review": review,
+        "deviation_readable": f"{sign}{deviation_minutes} min ({sign}{round(deviation_rate * 100, 1)}%)",
+        "tag_impacts": tag_impacts,
+        "task_already_completed": True,
+    }, ensure_ascii=False, indent=2))
+
+
+def cmd_energy(args):
+    profile = load_energy()
+
+    tag_summary = {}
+    for tag, tp in profile.get("tag_profiles", {}).items():
+        sign = "+" if tp["avg_deviation_rate"] > 0 else ""
+        tag_summary[tag] = {
+            "count": tp["count"],
+            "avg_deviation_rate": tp["avg_deviation_rate"],
+            "readable": f"{sign}{round(tp['avg_deviation_rate'] * 100, 1)}%",
+            "avg_procrastination": tp.get("avg_procrastination_count", 0.0),
+            "avg_deadline_adjusted": tp.get("avg_deadline_adjusted", 0.0),
+        }
+
+    global_rate = profile.get("global_avg_deviation_rate", 0.0)
+    global_sign = "+" if global_rate > 0 else ""
+
+    print(json.dumps({
+        "daily_limit_hours": profile.get("daily_limit_hours", 8.0),
+        "style": profile.get("style", "default"),
+        "total_reviews": profile.get("total_reviews", 0),
+        "global_avg_deviation": f"{global_sign}{round(global_rate * 100, 1)}%",
+        "global_avg_deviation_rate": global_rate,
+        "global_avg_procrastination": profile.get("global_avg_procrastination", 0.0),
+        "global_avg_deadline_adjusted": profile.get("global_avg_deadline_adjusted", 0.0),
+        "tag_profiles": tag_summary,
+    }, ensure_ascii=False, indent=2))
+
+
+def cmd_limit(args):
+    profile = load_energy()
+
+    if args.set is not None:
+        if args.set <= 0:
+            print(json.dumps({"error": "daily limit must be > 0 hours"}, ensure_ascii=False))
+            sys.exit(1)
+        old_limit = profile.get("daily_limit_hours", 8.0)
+        profile["daily_limit_hours"] = args.set
+        save_energy(profile)
+        print(json.dumps({
+            "daily_limit_hours": args.set,
+            "previous": old_limit,
+            "updated": True,
+        }, ensure_ascii=False, indent=2))
+    else:
+        print(json.dumps({
+            "daily_limit_hours": profile.get("daily_limit_hours", 8.0),
+            "daily_limit_minutes": int(profile.get("daily_limit_hours", 8.0) * 60),
+        }, ensure_ascii=False, indent=2))
+
+
+def cmd_deps(args):
+    """View / add / remove task dependencies."""
+    tasks = load_tasks()
+    task_map = {t["id"]: t for t in tasks}
+
+    target = task_map.get(args.task_id)
+    if not target:
+        print(json.dumps({"error": f"task {args.task_id} not found"}, ensure_ascii=False))
+        sys.exit(1)
+
+    if not args.add and not args.remove:
+        deps = []
+        for dep_id in target.get("dependencies", []):
+            dep = task_map.get(dep_id)
+            deps.append({
+                "task_id": dep_id,
+                "title": dep["title"] if dep else "(已删除)",
+                "status": dep["status"] if dep else "unknown",
+            })
+
+        dependents = []
+        for t in tasks:
+            if args.task_id in t.get("dependencies", []):
+                dependents.append({
+                    "task_id": t["id"],
+                    "title": t["title"],
+                    "status": t["status"],
+                    "priority": t["priority"],
+                })
+
+        print(json.dumps({
+            "task_id": args.task_id,
+            "title": target["title"],
+            "dependencies": deps,
+            "dependents": dependents,
+            "dependency_count": len(deps),
+            "dependent_count": len(dependents),
+        }, ensure_ascii=False, indent=2))
+        return
+
+    if args.add:
+        dep_id = args.add
+        if dep_id not in task_map:
+            print(json.dumps({"error": f"dependency task {dep_id} not found"}, ensure_ascii=False))
+            sys.exit(1)
+        if dep_id == args.task_id:
+            print(json.dumps({"error": "任务不能依赖自己"}, ensure_ascii=False))
+            sys.exit(1)
+
+        deps = target.get("dependencies", [])
+        if dep_id in deps:
+            print(json.dumps({"error": f"依赖 {dep_id} 已存在"}, ensure_ascii=False))
+            sys.exit(1)
+
+        cycle = detect_cycle_path(tasks, args.task_id, dep_id)
+        if cycle:
+            path_str = " -> ".join(cycle)
+            print(json.dumps({
+                "error": f"[BOSS-CYCLE] 检测到循环依赖：{path_str} -> {args.task_id}，已拒绝操作",
+                "cycle_path": cycle,
+            }, ensure_ascii=False))
+            sys.exit(1)
+
+        target.setdefault("dependencies", [])
+        target["dependencies"].append(dep_id)
+        target["updated_at"] = datetime.now().isoformat()
+        save_tasks(tasks)
+        print(json.dumps({
+            "added_dependency": {"from": args.task_id, "to": dep_id},
+            "task": target,
+        }, ensure_ascii=False, indent=2))
+        return
+
+    if args.remove:
+        dep_id = args.remove
+        deps = target.get("dependencies", [])
+        if dep_id not in deps:
+            print(json.dumps({"error": f"依赖 {dep_id} 不存在于任务 {args.task_id}"}, ensure_ascii=False))
+            sys.exit(1)
+
+        target["dependencies"] = [d for d in deps if d != dep_id]
+        if not target["dependencies"]:
+            del target["dependencies"]
+        target["updated_at"] = datetime.now().isoformat()
+        save_tasks(tasks)
+        print(json.dumps({
+            "removed_dependency": {"from": args.task_id, "to": dep_id},
+            "task": target,
+        }, ensure_ascii=False, indent=2))
+        return
+
+
+def cmd_config(args):
+    """Show or set config (style, etc.) stored in energy_profile.json."""
+    profile = load_energy()
+
+    if args.set_style is not None:
+        style = args.set_style
+        if style not in VALID_STYLES:
+            print(json.dumps({
+                "error": f"无效的风格值 '{style}'，可选值: {sorted(VALID_STYLES)}",
+            }, ensure_ascii=False))
+            sys.exit(1)
+        old_style = profile.get("style", "default")
+        profile["style"] = style
+        save_energy(profile)
+        print(json.dumps({
+            "style": style,
+            "previous": old_style,
+            "updated": True,
+        }, ensure_ascii=False, indent=2))
+    else:
+        print(json.dumps({
+            "style": profile.get("style", "default"),
+            "daily_limit_hours": profile.get("daily_limit_hours", 8.0),
+            "total_reviews": profile.get("total_reviews", 0),
+        }, ensure_ascii=False, indent=2))
+
+
+# ── Module 十: predict ─────────────────────────────────────────────────────
+
+def cmd_predict(args):
+    """Predict task duration and procrastination risk."""
+    tasks = load_tasks()
+    task = None
+    for t in tasks:
+        if t["id"] == args.task_id:
+            task = t
+            break
+    if not task:
+        print(json.dumps({"error": f"task {args.task_id} not found"}, ensure_ascii=False))
+        sys.exit(1)
+
+    profile = load_energy()
+    prediction = compute_prediction(task, profile)
+
+    tags = task.get("tags", [])
+    tag_profiles = profile.get("tag_profiles", {})
+    tag_details = {}
+    for tag in tags:
+        tp = tag_profiles.get(tag)
+        if tp and tp.get("count", 0) > 0:
+            tag_details[tag] = {
+                "count": tp["count"],
+                "avg_deviation_rate": tp["avg_deviation_rate"],
+                "avg_procrastination": tp.get("avg_procrastination_count", 0.0),
+                "avg_deadline_adjusted": tp.get("avg_deadline_adjusted", 0.0),
+            }
+
+    output = {
+        "task_id": task["id"],
+        "title": task["title"],
+        "estimated_minutes": task.get("estimated_minutes", 30),
+        "predicted_minutes": prediction["predicted_minutes"],
+        "deviation_rate": prediction["deviation_rate"],
+        "confidence": prediction["confidence"],
+        "procrastination_risk": prediction["procrastination_risk"],
+        "procrastination_score": prediction["procrastination_score"],
+        "tag_details": tag_details,
+    }
+
+    if prediction["procrastination_risk"] == "high":
+        output["procrastination_warning"] = "该任务拖延风险较高，建议优先安排并设置明确的截止时间"
+
+    print(json.dumps(output, ensure_ascii=False, indent=2))
+
+
+# ── Module 十: warn ─────────────────────────────────────────────────────────
+
+def cmd_warn(args):
+    """Scan all incomplete tasks for high procrastination risk."""
+    tasks = load_tasks()
+    profile = load_energy()
+    incomplete = [t for t in tasks if t["status"] not in ("completed", "cancelled")]
+
+    warnings = []
+    for task in incomplete:
+        prediction = compute_prediction(task, profile)
+        if prediction["procrastination_risk"] == "high":
+            warnings.append({
+                "task_id": task["id"],
+                "title": task["title"],
+                "priority": task["priority"],
+                "deadline": task.get("deadline"),
+                "procrastination_score": prediction["procrastination_score"],
+                "procrastination_risk": prediction["procrastination_risk"],
+                "procrastination_count": task.get("procrastination_count", 0),
+                "deadline_adjusted_count": task.get("deadline_adjusted_count", 0),
+            })
+
+    warnings.sort(key=lambda w: w["procrastination_score"], reverse=True)
+
+    print(json.dumps({
+        "warning_count": len(warnings),
+        "scanned_count": len(incomplete),
+        "warnings": warnings,
+    }, ensure_ascii=False, indent=2))
+
+
+# ── Module 十一: break ─────────────────────────────────────────────────────
+
+def cmd_break(args):
+    """Auto-split a large task into sub-tasks with verb-guided phases."""
+    tasks = load_tasks()
+    task = None
+    for t in tasks:
+        if t["id"] == args.task_id:
+            task = t
+            break
+    if not task:
+        print(json.dumps({"error": f"task {args.task_id} not found"}, ensure_ascii=False))
+        sys.exit(1)
+
+    estimated = task.get("estimated_minutes", 30)
+    if estimated <= 120:
+        print(json.dumps({
+            "error": f"任务预估 {estimated} 分钟 <= 120 分钟，无需拆分。只有超过 120 分钟的任务才能使用 break 命令。",
+            "estimated_minutes": estimated,
+        }, ensure_ascii=False))
+        sys.exit(1)
+
+    if task.get("has_subtasks"):
+        print(json.dumps({"error": "该任务已经拆分过，请勿重复操作"}, ensure_ascii=False))
+        sys.exit(1)
+
+    now = datetime.now().isoformat()
+    sub_tasks = []
+    prev_id = None
+
+    for i, (phase_name, ratio, _verb) in enumerate(BREAK_PHASES, 1):
+        sub_id = f"{task['id']}-sub-{i}"
+        sub_minutes = max(5, round(estimated * ratio))
+        sub_task = {
+            "id": sub_id,
+            "title": f"[{phase_name}] {task['title']}",
+            "description": f"父任务「{task['title']}」的{phase_name}阶段（自动拆分 第{i}/4步）",
+            "priority": task["priority"],
+            "status": "pending",
+            "estimated_minutes": sub_minutes,
+            "deadline": task.get("deadline"),
+            "created_at": now,
+            "updated_at": now,
+            "tags": task.get("tags", []),
+            "parent_task_id": task["id"],
+        }
+        if prev_id:
+            sub_task["dependencies"] = [prev_id]
+        sub_tasks.append(sub_task)
+        prev_id = sub_id
+
+    task["has_subtasks"] = True
+    task["updated_at"] = now
+    tasks.extend(sub_tasks)
+
+    # re-point dependents from parent to last sub-task
+    last_sub_id = sub_tasks[-1]["id"]
+    for t in tasks:
+        deps = t.get("dependencies", [])
+        if task["id"] in deps:
+            new_deps = [last_sub_id if d == task["id"] else d for d in deps]
+            t["dependencies"] = new_deps
+            t["updated_at"] = now
+
+    save_tasks(tasks)
+    print(json.dumps({
+        "parent_task_id": task["id"],
+        "parent_title": task["title"],
+        "original_minutes": estimated,
+        "sub_tasks": sub_tasks,
+        "note": "后续任务依赖已自动指向最后一个子任务",
+    }, ensure_ascii=False, indent=2))
+
+
+# ── Module 十二: stats ─────────────────────────────────────────────────────
+
+def cmd_stats(args):
+    """Show growth tracking statistics."""
+    ach_data = load_achievements()
+    stats = ach_data["stats"]
+
+    print(json.dumps({
+        "total_tasks_completed": stats.get("total_tasks_completed", 0),
+        "total_bosses_defeated": stats.get("total_bosses_defeated", 0),
+        "current_streak": stats.get("current_streak", 0),
+        "longest_streak": stats.get("longest_streak", 0),
+        "last_completed_date": stats.get("last_completed_date"),
+        "overload_trigger_count": stats.get("overload_trigger_count", 0),
+        "total_achievements": len(ach_data["achievements"]),
+        "achievement_ids": [a["id"] for a in ach_data["achievements"]],
+    }, ensure_ascii=False, indent=2))
+
+
+# ── Module 十二: achievements ──────────────────────────────────────────────
+
+def cmd_achievements(args):
+    """List all achievements with unlock status."""
+    ach_data = load_achievements()
+    unlocked_ids = {a["id"] for a in ach_data["achievements"]}
+    unlocked_map = {a["id"]: a for a in ach_data["achievements"]}
+
+    all_with_status = []
+    for ach_def in ALL_ACHIEVEMENTS:
+        ach_id = ach_def["id"]
+        if ach_id in unlocked_ids:
+            entry = {
+                **ach_def,
+                "unlocked": True,
+                "unlocked_at": unlocked_map[ach_id].get("unlocked_at"),
+            }
+        else:
+            entry = {**ach_def, "unlocked": False}
+        all_with_status.append(entry)
+
+    print(json.dumps({
+        "achievements": all_with_status,
+        "unlocked_count": len(unlocked_ids),
+        "total_count": len(ALL_ACHIEVEMENTS),
+        "stats": ach_data["stats"],
+    }, ensure_ascii=False, indent=2))
+
+
+# ── cli ─────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(description="Time Planner task manager")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # add
+    p_add = sub.add_parser("add", help="Add a new task")
+    p_add.add_argument("--title", required=True)
+    p_add.add_argument("--description", default="")
+    p_add.add_argument("--priority", default="medium", choices=VALID_PRIORITIES)
+    p_add.add_argument("--estimated-minutes", type=int, default=30)
+    p_add.add_argument("--deadline", default=None)
+    p_add.add_argument("--tags", default=None)
+
+    # list
+    p_list = sub.add_parser("list", help="List tasks")
+    p_list.add_argument("--status", choices=VALID_STATUSES)
+    p_list.add_argument("--priority", choices=VALID_PRIORITIES)
+
+    # modify
+    p_mod = sub.add_parser("modify", help="Modify a task")
+    p_mod.add_argument("task_id")
+    p_mod.add_argument("--title")
+    p_mod.add_argument("--description")
+    p_mod.add_argument("--priority", choices=VALID_PRIORITIES)
+    p_mod.add_argument("--status", choices=VALID_STATUSES)
+    p_mod.add_argument("--estimated-minutes", type=int)
+    p_mod.add_argument("--deadline", default=argparse.SUPPRESS,
+                       help="Set deadline (ISO format, e.g. 2026-05-16T18:00)")
+    p_mod.add_argument("--clear-deadline", dest="deadline_flag", action="store_true",
+                       help="Remove the deadline")
+    p_mod.add_argument("--tags")
+
+    # delete
+    p_del = sub.add_parser("delete", help="Delete a task")
+    p_del.add_argument("task_id")
+
+    # plan
+    p_plan = sub.add_parser("plan", help="Generate daily time plan")
+    p_plan.add_argument("--day-start", default="09:00")
+    p_plan.add_argument("--day-end", default="18:00")
+    p_plan.add_argument("--force", action="store_true")
+    p_plan.add_argument("--dynamic", action="store_true", help="Add next_best suggestion to output")
+
+    # review
+    p_rev = sub.add_parser("review", help="Record actual time and update energy profile")
+    p_rev.add_argument("task_id")
+    p_rev.add_argument("actual_minutes", type=int, help="Actual minutes spent")
+
+    # energy
+    sub.add_parser("energy", help="Show energy deviation profile summary")
+
+    # limit
+    p_lim = sub.add_parser("limit", help="Show or set daily working hour limit")
+    p_lim.add_argument("--set", type=float, dest="set", default=None, help="Set daily limit in hours")
+
+    # deps
+    p_deps = sub.add_parser("deps", help="View / add / remove task dependencies")
+    p_deps.add_argument("task_id", help="Task ID")
+    p_deps.add_argument("--add", default=None, help="Add a dependency (task ID)")
+    p_deps.add_argument("--remove", default=None, help="Remove a dependency (task ID)")
+
+    # config
+    p_cfg = sub.add_parser("config", help="Show or set config (style, etc.)")
+    p_cfg.add_argument("--set-style", dest="set_style", default=None, choices=VALID_STYLES,
+                       help="Set conversation style")
+
+    # predict (Module 十)
+    p_pred = sub.add_parser("predict", help="Predict task duration and procrastination risk")
+    p_pred.add_argument("task_id", help="Task ID to predict")
+
+    # warn (Module 十)
+    sub.add_parser("warn", help="Scan for high procrastination risk tasks")
+
+    # break (Module 十一)
+    p_break = sub.add_parser("break", help="Split a large task into sub-tasks by phases")
+    p_break.add_argument("task_id", help="Task ID to split")
+
+    # stats (Module 十二)
+    sub.add_parser("stats", help="Show growth tracking statistics")
+
+    # achievements (Module 十二)
+    sub.add_parser("achievements", help="List all achievements with unlock status")
+
+    args = parser.parse_args()
+
+    cmds = {
+        "add": cmd_add,
+        "list": cmd_list,
+        "modify": cmd_modify,
+        "delete": cmd_delete,
+        "plan": cmd_plan,
+        "review": cmd_review,
+        "energy": cmd_energy,
+        "limit": cmd_limit,
+        "deps": cmd_deps,
+        "config": cmd_config,
+        "predict": cmd_predict,
+        "warn": cmd_warn,
+        "break": cmd_break,
+        "stats": cmd_stats,
+        "achievements": cmd_achievements,
+    }
+    cmds[args.command](args)
+
+
+if __name__ == "__main__":
+    main()

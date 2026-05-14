@@ -1,0 +1,25 @@
+# 个人数据文件 — 包含真实任务、精力偏差、成就记录，绝对不能上传
+tasks.json
+energy_profile.json
+achievements.json
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 日志文件
+*.log
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+*~
