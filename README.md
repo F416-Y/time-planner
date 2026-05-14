@@ -182,6 +182,7 @@ time-planner/
 - 精力偏差档案需要累计至少 3 次复盘才开始有明显修正效果
 - `examples/` 目录下是虚构的示例数据，仅供参考数据结构
 - 默认语言：中文
+- 本人能力有限，很多功能可能还不够完善，欢迎大佬们提 Issue / PR 指点 🙏
 
 ---
 
@@ -358,6 +359,7 @@ time-planner/
 - Energy deviation profile needs at least 3 reviews before corrections become noticeable
 - `examples/` contains fictional sample data for reference only
 - Default language: Chinese
+- I'm still learning — many features may not be perfect. Issues / PRs are more than welcome 🙏
 
 ---
 
