@@ -148,8 +148,8 @@ AI ：「📊 复盘完成！预估 90' 实际 117'，偏差 +27 分钟 (+30%)
 用户：「看看我的数据」
 AI ：「📊 累计完成 12 个任务 | 击败 3 个 Boss 🐉 | 连续 2 天 🔥 | 成就 2/7」
 
-用户：「切换成 doubao 模式」
-AI ：「🥒 小睦，豆包模式已开启。今天也要默默地努力哦。」
+用户：「切换成游戏模式」
+AI ：「⚔️ 小睦，游戏模式已开启。今日副本攻略准备好了吗？」
 ```
 
 ---
@@ -330,8 +330,8 @@ AI  : "📊 Review done! Est. 90' Actual 117', deviation +27 min (+30%)
 User: "Show my stats"
 AI  : "📊 12 tasks completed | 3 Bosses defeated 🐉 | 2-day streak 🔥 | 2/7 achievements"
 
-User: "Switch to doubao mode"
-AI  : "🥒 Mutsumi, doubao mode activated. Let's work hard in silence today too."
+User: "Switch to game mode"
+AI  : "⚔️ Mutsumi, game mode activated. Ready for today's quest?"
 ```
 
 ---
