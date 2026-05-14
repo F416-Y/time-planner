@@ -2,6 +2,12 @@
 
 > 用自然语言管理时间。添加任务、制定每日规划、追踪习惯、预测拖延——说句话就行。
 
+[English](#english) | [中文](#中文)
+
+---
+
+## 中文
+
 ---
 
 ### 这个 Skill 解决什么问题？
@@ -170,5 +176,169 @@ time-planner/
 ---
 
 ### 许可
+
+MIT License
+
+---
+
+## English
+
+### What problem does this Skill solve?
+
+Task management tools are everywhere, but they're **a chore to use**:
+
+- Adding a task means filling out half a dozen fields — more work than the task itself
+- Plans get made but never followed, because nothing tells you what to do first
+- You have no idea how long things actually take, so estimates are always off
+- Too many tasks → anxiety. Which to cut? Which to prioritize?
+- Big tasks sit untouched for weeks because nobody broke them down
+
+The core idea: **You speak in natural language. Claude handles everything behind the scenes and presents results in a human-friendly way.**
+
+---
+
+### What can it do?
+
+| Feature | How to trigger | Description |
+|---------|---------------|-------------|
+| **Add task** | "Add a task: XX, priority XX, XX min" | Auto-extracts title, priority, estimate, deadline, tags |
+| **View tasks** | "What's on my plate today?" | Filter by status/priority, auto-sorted |
+| **Update status** | "XX is done", "Starting XX" | One sentence to mark complete or in-progress |
+| **Delete task** | "Remove XX" | Shows details, confirms before deleting |
+| **Daily plan** | "Plan my day: [paste details]" | Auto-detects date/time range, topo-sort + deviation correction + time blocks |
+| **Review** | "XX actually took XX minutes" | Records deviation, updates energy profile, gets smarter over time |
+| **Energy profile** | "Show my deviation report" | Per-tag historical accuracy stats |
+| **Overload protection** | Auto-triggered during planning | Filters to most important tasks when exceeding daily limit |
+| **Dependencies** | "XX can't start until YY is done" | Add prerequisites, cycle detection, Boss task identification |
+| **Style switching** | "Switch to game mode" | 5 styles: default / strict / encourage / concise / playful |
+| **Smart prediction** | "Predict if this will be delayed" | Estimates real duration and procrastination risk from history |
+| **Risk scan** | "Scan for procrastination risks" | Flags high-risk tasks across all incomplete items |
+| **Task splitting** | "This task is too big, break it down" | Auto-splits into 4 phases: research → organize → output → review |
+| **Stats** | "Show my stats" | Tasks completed, bosses defeated, streak days |
+| **Achievements** | "What achievements have I unlocked?" | 7 gamified achievement badges |
+
+---
+
+### Installation
+
+Via Claude Code CLI:
+
+```bash
+cd ~/.claude/skills/
+git clone git@github.com:F416-Y/time-planner.git
+cd time-planner
+
+# Create your data files from examples
+cp examples/tasks.example.json tasks.json
+cp examples/energy_profile.example.json energy_profile.json
+cp examples/achievements.example.json achievements.json
+
+# Edit the three files to replace example data with empty defaults
+```
+
+---
+
+### Quick Start
+
+**Step 1 — Initialize data files**
+
+Copy the three example files from `examples/`, remove the `.example` suffix, and replace contents with empty defaults:
+
+```
+tasks.json          →  {"tasks": []}
+energy_profile.json →  see empty structure in example file
+achievements.json   →  see empty structure in example file
+```
+
+**Step 2 — Add your first task**
+
+```
+Add a task: XX report, priority XX, estimated XX minutes, due by XX, tags: XX
+```
+
+**Step 3 — Generate a daily plan**
+
+```
+Plan my day: [paste your requirements]
+```
+
+Claude reads your energy profile, corrects estimates with historical deviation data, and generates time blocks sorted by priority and dependencies.
+
+**Step 4 — Review after completing**
+
+```
+XX is done, actually took XX minutes
+```
+
+Claude records the deviation, updates your energy profile, and may unlock achievements. The more you review, the more accurate predictions become.
+
+---
+
+### Conversation example
+
+```
+User: "Add a task: XX, priority XX, estimated XX min, due by XX, tags: XX"
+AI  : "Confirming:
+      XX | 🔴 High | XX min | Due XX | Tags XX
+      ✅ Create?"
+User: "Yes"
+
+User: "Plan my day"
+AI  : "📅 Today (09:00 - 18:00)
+      09:00 - 10:30  🔴 XX  est.XX'→adj.XX'
+      10:30 - 11:00  🟡 XX  XX'
+      ...
+
+User: "XX is done, actually took XX min"
+AI  : "📊 Review done! Est. XX' Actual XX', deviation +XX min (+XX%)
+      🏆 Achievement unlocked: XX!"
+
+User: "Show my stats"
+AI  : "📊 15 tasks completed | 4 Bosses defeated 🐉 | 5-day streak 🔥 | 3/7 achievements"
+
+User: "Switch to game mode"
+AI  : "⚔️ Adventurer, game mode activated! Ready for today's quest?"
+```
+
+---
+
+### Who is this for?
+
+- People with lots of tasks who need AI to sort priorities
+- Chronic underestimators who want to improve through review
+- Anyone with complex dependency chains who needs to find blockers
+- Big-task procrastinators who need automatic breakdowns
+- People motivated by gamification and achievement systems
+
+---
+
+### Project structure
+
+```
+time-planner/
+├── skill.md                   # AI behavior definition
+├── task_manager.py            # Backend CLI script
+├── README.md
+├── examples/                  # Example data files
+│   ├── tasks.example.json
+│   ├── energy_profile.example.json
+│   └── achievements.example.json
+├── tasks.json
+├── energy_profile.json
+└── achievements.json
+```
+
+---
+
+### Notes
+
+- Energy deviation profile needs at least 3 reviews before corrections become noticeable
+- `examples/` contains fictional sample data for reference only
+- `tasks.json`, `energy_profile.json`, `achievements.json` contain personal data and are excluded via `.gitignore`
+- Default language: Chinese
+
+---
+
+### License
 
 MIT License
