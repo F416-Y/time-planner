@@ -148,22 +148,16 @@ AI ：「⚔️ 冒险者，游戏模式已开启！今日副本攻略准备好�
 ```
 time-planner/
 ├── skill.md                   # AI 行为定义
-├── task_manager.py            # 后端 CLI 脚本（AI 自动调用，你无需关心）
-├── README.md                  # 本文件
-├── examples/                  # 示例数据（可安全上传）
+├── task_manager.py            # 后端 CLI 脚本
+├── README.md
+├── examples/                  # 示例数据文件
 │   ├── tasks.example.json
 │   ├── energy_profile.example.json
 │   └── achievements.example.json
-├── tasks.json                 # 你的任务数据（不上传 🙅）
-├── energy_profile.json        # 你的精力档案（不上传 🙅）
-└── achievements.json          # 你的成就记录（不上传 🙅）
+├── tasks.json
+├── energy_profile.json
+└── achievements.json
 ```
-
----
-
-### 隐私说明
-
-`tasks.json`、`energy_profile.json`、`achievements.json` 三个文件包含你的个人数据（任务内容、精力偏差、成就记录），已在 `.gitignore` 中排除，不会随仓库上传。
 
 ---
 
@@ -172,6 +166,7 @@ time-planner/
 - 需要 Claude Pro / Team 账号才能使用 Skill
 - 精力偏差档案需要累计至少 3 次复盘才开始有明显修正效果
 - `examples/` 目录下是虚构的示例数据，仅供参考数据结构
+- `tasks.json`、`energy_profile.json`、`achievements.json` 包含个人数据，已通过 `.gitignore` 排除
 - 默认语言：中文
 
 ---
