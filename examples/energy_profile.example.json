@@ -1,77 +1,108 @@
 {
   "daily_limit_hours": 8.0,
-  "style": "playful",
+  "style": "doubao",
   "tag_profiles": {
-    "coding": {
+    "演出/访谈": {
       "review_ids": [
-        "rev-20260510-ab12cd",
-        "rev-20260511-ef34gh",
-        "rev-20260512-ij56kl",
-        "rev-20260513-mn78op",
-        "rev-20260514-qr90st"
+        "rev-20260514-intv01",
+        "rev-20260510-intv02"
       ],
-      "avg_deviation_rate": 0.35,
-      "count": 5,
-      "avg_procrastination_count": 1.4,
-      "avg_deadline_adjusted": 0.2
-    },
-    "报告": {
-      "review_ids": [
-        "rev-20260512-uv12wx",
-        "rev-20260513-yz34ab"
-      ],
-      "avg_deviation_rate": 0.15,
+      "avg_deviation_rate": 0.25,
       "count": 2,
-      "avg_procrastination_count": 0.5,
-      "avg_deadline_adjusted": 1.0
-    },
-    "沟通": {
-      "review_ids": [
-        "rev-20260511-cd56ef",
-        "rev-20260512-gh78ij",
-        "rev-20260514-kl90mn"
-      ],
-      "avg_deviation_rate": -0.08,
-      "count": 3,
       "avg_procrastination_count": 0.0,
       "avg_deadline_adjusted": 0.0
     },
-    "会议": {
+    "乐队/练习": {
       "review_ids": [
-        "rev-20260510-op12qr"
+        "rev-20260513-band01",
+        "rev-20260511-band02"
       ],
-      "avg_deviation_rate": -0.20,
-      "count": 1,
+      "avg_deviation_rate": -0.10,
+      "count": 2,
       "avg_procrastination_count": 0.0,
       "avg_deadline_adjusted": 0.0
+    },
+    "人际": {
+      "review_ids": [
+        "rev-20260512-rel01",
+        "rev-20260509-rel02"
+      ],
+      "avg_deviation_rate": 0.40,
+      "count": 2,
+      "avg_procrastination_count": 1.0,
+      "avg_deadline_adjusted": 0.5
     }
   },
-  "global_avg_deviation_rate": 0.12,
-  "global_avg_procrastination": 0.6,
-  "global_avg_deadline_adjusted": 0.3,
-  "total_reviews": 11,
+  "global_avg_deviation_rate": 0.18,
+  "global_avg_procrastination": 0.33,
+  "global_avg_deadline_adjusted": 0.17,
+  "total_reviews": 6,
   "reviews": [
     {
-      "id": "rev-20260514-qr90st",
-      "task_id": "20260514-abc001",
-      "title": "修复登录页面样式错乱",
-      "tags": ["coding"],
-      "estimated_minutes": 30,
-      "actual_minutes": 45,
-      "deviation_minutes": 15,
-      "deviation_rate": 0.50,
-      "reviewed_at": "2026-05-14T15:00:00"
+      "id": "rev-20260514-intv01",
+      "task_id": "20260514-mtm-03",
+      "title": "《Music Nova》武道馆公演专访",
+      "tags": ["演出/访谈"],
+      "estimated_minutes": 90,
+      "actual_minutes": 117,
+      "deviation_minutes": 27,
+      "deviation_rate": 0.30,
+      "reviewed_at": "2026-05-14T15:15:00"
     },
     {
-      "id": "rev-20260513-mn78op",
-      "task_id": "20260513-def002",
-      "title": "实现搜索自动补全",
-      "tags": ["coding"],
+      "id": "rev-20260510-intv02",
+      "task_id": "20260510-intv01",
+      "title": "电台节目简短访谈",
+      "tags": ["演出/访谈"],
+      "estimated_minutes": 20,
+      "actual_minutes": 24,
+      "deviation_minutes": 4,
+      "deviation_rate": 0.20,
+      "reviewed_at": "2026-05-10T14:00:00"
+    },
+    {
+      "id": "rev-20260513-band01",
+      "task_id": "20260513-band01",
+      "title": "Ave Mujica 合练",
+      "tags": ["乐队/练习"],
+      "estimated_minutes": 180,
+      "actual_minutes": 158,
+      "deviation_minutes": -22,
+      "deviation_rate": -0.12,
+      "reviewed_at": "2026-05-13T20:30:00"
+    },
+    {
+      "id": "rev-20260511-band02",
+      "task_id": "20260511-band01",
+      "title": "个人吉他基础练习",
+      "tags": ["乐队/练习"],
       "estimated_minutes": 60,
-      "actual_minutes": 80,
-      "deviation_minutes": 20,
-      "deviation_rate": 0.33,
-      "reviewed_at": "2026-05-13T17:30:00"
+      "actual_minutes": 55,
+      "deviation_minutes": -5,
+      "deviation_rate": -0.08,
+      "reviewed_at": "2026-05-11T19:00:00"
+    },
+    {
+      "id": "rev-20260512-rel01",
+      "task_id": "20260512-rel01",
+      "title": "和祥子讨论新曲方向",
+      "tags": ["人际"],
+      "estimated_minutes": 15,
+      "actual_minutes": 21,
+      "deviation_minutes": 6,
+      "deviation_rate": 0.40,
+      "reviewed_at": "2026-05-12T21:00:00"
+    },
+    {
+      "id": "rev-20260509-rel02",
+      "task_id": "20260509-rel01",
+      "title": "给素世发LINE消息",
+      "tags": ["人际"],
+      "estimated_minutes": 10,
+      "actual_minutes": 14,
+      "deviation_minutes": 4,
+      "deviation_rate": 0.40,
+      "reviewed_at": "2026-05-09T22:30:00"
     }
   ]
 }

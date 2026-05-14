@@ -5,29 +5,22 @@
       "name": "初次胜利",
       "description": "完成第一个任务",
       "icon": "TROPHY",
-      "unlocked_at": "2026-05-10T10:30:00"
+      "unlocked_at": "2026-05-08T16:30:00"
     },
     {
-      "id": "STREAK_3",
-      "name": "连续三日",
-      "description": "连续3天有完成任务",
-      "icon": "FIRE",
-      "unlocked_at": "2026-05-12T18:45:00"
-    },
-    {
-      "id": "SHARPSHOOTER",
-      "name": "神射手",
-      "description": "复盘偏差率低于10%",
-      "icon": "TARGET",
-      "unlocked_at": "2026-05-11T14:20:00"
+      "id": "OVERLOAD_REJECT",
+      "name": "拒绝过载",
+      "description": "累计3次触发过载保护",
+      "icon": "SHIELD",
+      "unlocked_at": "2026-05-13T20:00:00"
     }
   ],
   "stats": {
-    "total_tasks_completed": 15,
-    "total_bosses_defeated": 4,
-    "current_streak": 5,
+    "total_tasks_completed": 12,
+    "total_bosses_defeated": 3,
+    "current_streak": 2,
     "longest_streak": 5,
     "last_completed_date": "2026-05-14",
-    "overload_trigger_count": 2
+    "overload_trigger_count": 3
   }
 }

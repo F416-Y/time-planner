@@ -113,38 +113,43 @@ Claude 会记录偏差、更新你的精力档案、可能解锁新成就。复�
 ### 对话示例
 
 ```
-用户：「帮我添加任务：周五前完成用户登录页响应式适配，适配手机和平板，高优先级的」
+用户：「帮我添加任务：今天下午Ave Mujica武道馆公演前最后排练，祥子要改新曲吉他编曲，高优先，估计3小时」
 AI ：「分析结果：
-      标题: 登录页响应式适配 | 🔴 高 | 预估 60 min | 截止 周五 18:00 | 标签 coding·前端
-      📝 详情: 适配手机和平板尺寸
+      标题: Ave Mujica 武道馆公演前最后排练 | 🔴 高 | 预估 180 min | 截止 今天 20:00 | 标签 乐队/练习·人际
+      📝 详情: 和祥子、海铃、喵梦、初华在排练室集合，修改新曲第三段编曲
       ✅ 创建吗？」
 用户：「确认」
-AI ：「已创建 ✅ 登录页响应式适配 [a3f2b1]」
+AI ：「已创建 ✅ Ave Mujica 武道馆公演前最后排练 [20260514-mtm-04]」
 
-用户：「帮我添加任务：抽空整理下这周会议纪要」
+用户：「帮我添加任务：晚上把今天新摘的黄瓜包好，明天带给素世」
 AI ：「分析结果：
-      标题: 整理周会议纪要 | 🟢 低 | 预估 30 min | 标签 沟通·文档
+      标题: 把今天新摘的黄瓜包好，明天带给素世 | 🟢 低 | 预估 20 min | 标签 人际
+      📝 详情: 挑了今天长得最好的两根黄瓜，用报纸包好系上浅绿色丝带。昨晚也想过送但没送出去
       ✅ 创建吗？」
-用户：「预估改 45 分钟吧」
-AI ：「已修正，确认：整理周会议纪要 | 🟢 低 | 预估 45 min | 标签 沟通·文档」
+用户：「预估改 15 分钟吧……包个黄瓜不用那么久」
+AI ：「已修正，确认：把今天新摘的黄瓜包好，明天带给素世 | 🟢 低 | 预估 15 min | 标签 人际」
 用户：「确认」
 AI ：「已创建 ✅」
 
 用户：「帮我规划今天」
-AI ：「📅 今日规划 (09:00 - 18:00)
-      09:00 - 10:30  🔴 XX  预估XX'→修正XX'
-      10:30 - 11:00  🟡 XX  XX'
+AI ：「📅 今日规划 (09:00 - 22:00)
+      09:00 - 14:00  🔴 月之森晨间课程  300'
+      14:00 - 15:00  🔴 Music Nova 武道馆专访  90'→修正112'
+      15:00 - 15:30  🟡 园艺部给黄瓜浇水  15'
+      15:30 - 18:30  🔴 Ave Mujica 排练  180'
       ...
+      ⚠️ Boss 阻断: 「与 Mortis 达成和解」阻塞了「祥子补习」，建议优先处理」
 
-用户：「XX 做完了，实际花了 XX 分钟」
-AI ：「📊 复盘完成！预估 XX' 实际 XX'，偏差 +XX 分钟 (+XX%)
-      🏆 新成就解锁：XX！」
+用户：「Music Nova 武道馆专访做完了，实际花了 117 分钟」
+AI ：「📊 复盘完成！预估 90' 实际 117'，偏差 +27 分钟 (+30%)
+      📈 标签「演出/访谈」偏差率更新：+25%
+      🏆 新成就解锁：神射手！」
 
 用户：「看看我的数据」
-AI ：「📊 累计完成 15 个任务 | 击败 4 个 Boss 🐉 | 连续 5 天 🔥 | 成就 3/7」
+AI ：「📊 累计完成 12 个任务 | 击败 3 个 Boss 🐉 | 连续 2 天 🔥 | 成就 2/7」
 
-用户：「切换成游戏模式」
-AI ：「⚔️ 冒险者，游戏模式已开启！今日副本攻略准备好了吗？」
+用户：「切换成 doubao 模式」
+AI ：「🥒 小睦，豆包模式已开启。今天也要默默地努力哦。」
 ```
 
 ---
@@ -290,38 +295,43 @@ Claude records the deviation, updates your energy profile, and may unlock achiev
 ### Conversation example
 
 ```
-User: "Add a task: Complete responsive login page adaptation for mobile and tablet by Friday, high priority"
+User: "Add a task: Final rehearsal before Ave Mujica's Budokan concert this afternoon, Sakiko wants to rework the guitar arrangement, high priority, about 3 hours"
 AI  : "Analysis:
-      Title: Login page responsive adaptation | 🔴 High | Est. 60 min | Due Fri 18:00 | Tags coding·frontend
-      📝 Details: Adapt for mobile and tablet screen sizes
+      Title: Ave Mujica final rehearsal before Budokan | 🔴 High | Est. 180 min | Due today 20:00 | Tags band/practice·social
+      📝 Details: Gather with Sakiko, Umiri, Nyamu, and Uika at the studio to rework the third section's arrangement
       ✅ Create?"
 User: "Yes"
-AI  : "Created ✅ Login page responsive adaptation [a3f2b1]"
+AI  : "Created ✅ Ave Mujica final rehearsal before Budokan [20260514-mtm-04]"
 
-User: "Add a task: Organize this week's meeting notes when I have time"
+User: "Add a task: Wrap the cucumbers I picked today to give to Soyo tomorrow"
 AI  : "Analysis:
-      Title: Organize weekly meeting notes | 🟢 Low | Est. 30 min | Tags communication·docs
+      Title: Wrap fresh cucumbers for Soyo | 🟢 Low | Est. 20 min | Tags social
+      📝 Details: Picked the two best cucumbers from the garden, wrapped in newspaper with a light green ribbon. Tried to give them yesterday but couldn't go through with it
       ✅ Create?"
-User: "Change estimate to 45 min"
-AI  : "Updated. Confirm: Organize weekly meeting notes | 🟢 Low | Est. 45 min | Tags communication·docs"
+User: "Change estimate to 15 min... it's just wrapping cucumbers"
+AI  : "Updated. Confirm: Wrap fresh cucumbers for Soyo | 🟢 Low | Est. 15 min | Tags social"
 User: "Confirm"
 AI  : "Created ✅"
 
 User: "Plan my day"
-AI  : "📅 Today (09:00 - 18:00)
-      09:00 - 10:30  🔴 XX  est.XX'→adj.XX'
-      10:30 - 11:00  🟡 XX  XX'
+AI  : "📅 Today (09:00 - 22:00)
+      09:00 - 14:00  🔴 Tsukinomori morning classes  300'
+      14:00 - 15:00  🔴 Music Nova Budokan interview  90'→adj.112'
+      15:00 - 15:30  🟡 Water cucumbers at gardening club  15'
+      15:30 - 18:30  🔴 Ave Mujica rehearsal  180'
       ...
+      ⚠️ Boss blocker: 'Reconcile with Mortis' is blocking 'Sakiko tutoring session', prioritize this"
 
-User: "XX is done, actually took XX min"
-AI  : "📊 Review done! Est. XX' Actual XX', deviation +XX min (+XX%)
-      🏆 Achievement unlocked: XX!"
+User: "Music Nova interview is done, actually took 117 minutes"
+AI  : "📊 Review done! Est. 90' Actual 117', deviation +27 min (+30%)
+      📈 Tag 'interview' deviation updated: +25%
+      🏆 Achievement unlocked: Sharpshooter!"
 
 User: "Show my stats"
-AI  : "📊 15 tasks completed | 4 Bosses defeated 🐉 | 5-day streak 🔥 | 3/7 achievements"
+AI  : "📊 12 tasks completed | 3 Bosses defeated 🐉 | 2-day streak 🔥 | 2/7 achievements"
 
-User: "Switch to game mode"
-AI  : "⚔️ Adventurer, game mode activated! Ready for today's quest?"
+User: "Switch to doubao mode"
+AI  : "🥒 Mutsumi, doubao mode activated. Let's work hard in silence today too."
 ```
 
 ---
