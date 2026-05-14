@@ -28,7 +28,7 @@
 
 | 功能 | 触发方式 | 说明 |
 |------|---------|------|
-| **添加任务** | 「帮我加一个任务，XX，优先级XX，XX分钟」 | 自动提取标题/优先级/耗时/截止时间/标签 |
+| **添加任务** | 「帮我添加任务：[粘贴任务内容]」 | AI 自动分析提取标题/优先级/耗时/标签/截止时间，确认即创建 |
 | **查看任务** | 「今天有什么任务」「高优先级的」 | 按状态、优先级过滤，自动排序 |
 | **修改状态** | 「XX 做完了」「开始做 XX」 | 一句话改状态，自动匹配任务 |
 | **删除任务** | 「删掉 XX 任务」 | 展示详情并确认后删除 |
@@ -87,10 +87,10 @@ achievements.json   →  见示例文件中的空结构
 对 Claude 说：
 
 ```
-帮我加一个任务，XX，优先级XX，预估 XX 分钟，XX时间前截止，标签是XX
+帮我添加任务：[粘贴你的任务内容]
 ```
 
-Claude 会自动提取所有信息，生成任务并展示摘要，确认后即可创建。
+Claude 会自动分析内容，提取标题、优先级、预估耗时、标签、截止时间等所有字段，展示分析结果，你确认后即可创建。你还可以对分析结果做修正，比如「预估改 45 分钟」。
 
 #### 第三步：生成每日规划
 
@@ -113,11 +113,13 @@ Claude 会记录偏差、更新你的精力档案、可能解锁新成就。复�
 ### 对话示例
 
 ```
-用户：「帮我加一个任务，XX，优先级XX，预估 XX 分钟，XX时间前截止，标签是XX」
-AI ：「好的，确认一下：
-      XX | 🔴 高 | XX 分钟 | 截止 XX | 标签 XX
+用户：「帮我添加任务：XX前完成XX，适配XX，高优先级」
+AI ：「分析结果：
+      标题: XX | 🔴 高 | 预估 XX min | 截止 XX | 标签 coding·前端
+      📝 详情: XX
       ✅ 创建吗？」
 用户：「确认」
+AI ：「已创建 ✅ XX [XXXXX]」
 
 用户：「帮我规划今天」
 AI ：「📅 今日规划 (09:00 - 18:00)
@@ -201,7 +203,7 @@ The core idea: **You speak in natural language. Claude handles everything behind
 
 | Feature | How to trigger | Description |
 |---------|---------------|-------------|
-| **Add task** | "Add a task: XX, priority XX, XX min" | Auto-extracts title, priority, estimate, deadline, tags |
+| **Add task** | "Add a task: [paste content]" | AI auto-analyzes content, extracts all fields, confirm to create |
 | **View tasks** | "What's on my plate today?" | Filter by status/priority, auto-sorted |
 | **Update status** | "XX is done", "Starting XX" | One sentence to mark complete or in-progress |
 | **Delete task** | "Remove XX" | Shows details, confirms before deleting |
@@ -253,8 +255,10 @@ achievements.json   →  see empty structure in example file
 **Step 2 — Add your first task**
 
 ```
-Add a task: XX report, priority XX, estimated XX minutes, due by XX, tags: XX
+Add a task: [paste your task content]
 ```
+
+Claude auto-analyzes the content, extracts title, priority, estimate, tags, and deadline, then presents the analysis for your confirmation. You can also correct any field, e.g. "change estimate to 45 min".
 
 **Step 3 — Generate a daily plan**
 
@@ -277,11 +281,13 @@ Claude records the deviation, updates your energy profile, and may unlock achiev
 ### Conversation example
 
 ```
-User: "Add a task: XX, priority XX, estimated XX min, due by XX, tags: XX"
-AI  : "Confirming:
-      XX | 🔴 High | XX min | Due XX | Tags XX
+User: "Add a task: Complete XX adaptation by XX, high priority"
+AI  : "Analysis:
+      Title: XX | 🔴 High | Est. XX min | Due XX | Tags coding·frontend
+      📝 Details: XX
       ✅ Create?"
 User: "Yes"
+AI  : "Created ✅ XX [XXXXX]"
 
 User: "Plan my day"
 AI  : "📅 Today (09:00 - 18:00)
