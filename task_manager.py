@@ -6,7 +6,7 @@ Usage:
   python task_manager.py list [--status ...] [--priority ...]
   python task_manager.py modify <id> [options]
   python task_manager.py delete <id>
-  python task_manager.py plan [--day-start 09:00] [--day-end 18:00] [--force] [--dynamic]
+  python task_manager.py plan [--day-start 09:00] [--day-end 18:00] [--force] [--dynamic] [--quick]
   python task_manager.py review <id> <actual_minutes>
   python task_manager.py energy
   python task_manager.py limit [--set <hours>]
@@ -17,7 +17,7 @@ Usage:
   python task_manager.py break <task_id>
   python task_manager.py stats
   python task_manager.py achievements
-  python task_manager.py export <type> [--output <file.docx>] [--status ...]
+  python task_manager.py export <type> [--output <file.docx>] [--status ...] [--pdf]
 
 All commands output JSON to stdout. Errors go to stderr.
 """
@@ -812,6 +812,37 @@ def cmd_plan(args):
             feasible, routine_adjusted, args.day_start, args.day_end, args.dynamic
         )
 
+        # ── quick mode: auto-proceed with feasible plan, no confirmation ──
+        if args.quick:
+            normal_count = sum(1 for e in combined_plan if not e.get("is_routine"))
+            quick_output = {
+                "day_range": f"{args.day_start} - {args.day_end}",
+                "planned_count": len(combined_plan),
+                "remaining_tasks": len(adjusted_list) - normal_count,
+                "routine_count": sum(1 for e in combined_plan if e.get("is_routine")),
+                "energy_adjustment_active": adjustment_active,
+                "plan": combined_plan,
+                "quick": True,
+                "overload_skipped": {
+                    "total_adjusted_minutes": total_adjusted,
+                    "daily_limit_minutes": daily_limit_minutes,
+                    "daily_limit_hours": daily_limit_hours,
+                    "overload_count": len(overload),
+                    "overload_tasks": overload,
+                },
+            }
+            if args.dynamic and overload:
+                quick_output["next_best"] = overload[0]["task_id"]
+            if cycle_detected:
+                quick_output["cycle_warning"] = "检测到循环依赖，已降级为原始排序，建议手动修复 tasks.json。"
+            if boss_tasks:
+                quick_output["boss_tasks_detected"] = True
+                quick_output["boss_task_ids"] = list(boss_tasks.keys())
+            if new_achs:
+                quick_output["new_achievements"] = new_achs
+            print(json.dumps(quick_output, ensure_ascii=False, indent=2))
+            return
+
         suggestion = (
             f"今日修正后总耗时 {total_adjusted} 分钟（{total_adjusted / 60:.1f} 小时），"
             f"超过每日上限 {daily_limit_minutes} 分钟（{daily_limit_hours} 小时）。"
@@ -863,6 +894,8 @@ def cmd_plan(args):
     }
     if args.force:
         output["forced"] = True
+    if args.quick:
+        output["quick"] = True
     if args.dynamic and next_best:
         output["next_best"] = next_best
     if cycle_detected:
@@ -1629,6 +1662,41 @@ def _generate_export_filename(prefix):
     return f"{prefix}_{ts}.docx"
 
 
+def _generate_pdf_filename(prefix):
+    """Generate a timestamped .pdf filename."""
+    ts = datetime.now().strftime("%Y%m%d")
+    return f"{prefix}_{ts}.pdf"
+
+
+def _check_fpdf2():
+    """Check fpdf2 is installed. Return the module or exit with hint."""
+    try:
+        from fpdf import FPDF
+        return FPDF
+    except ImportError:
+        print(json.dumps({
+            "error": "fpdf2 库未安装。请运行: pip install fpdf2"
+        }, ensure_ascii=False))
+        sys.exit(1)
+
+
+def _find_chinese_font():
+    """Find a Chinese-capable TTF font on the system."""
+    candidates = [
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simhei.ttf",
+        "C:/Windows/Fonts/simsun.ttc",
+        "C:/Windows/Fonts/msyhbd.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def _setup_doc(doc, title_text):
     """Add title, generation date, and footer to a Document."""
     from docx.shared import Pt, RGBColor
@@ -1937,8 +2005,146 @@ def _setup_doc_base():
     return Document()
 
 
+def _export_plan_pdf(args):
+    """Export daily plan as a PDF file using fpdf2."""
+    _check_fpdf2()
+    from fpdf import FPDF
+
+    font_path = _find_chinese_font()
+    if font_path is None:
+        print(json.dumps({
+            "error": "未找到中文字体文件，无法生成 PDF。请安装中文字体或使用 export plan (docx) 代替。"
+        }, ensure_ascii=False))
+        sys.exit(1)
+
+    tasks = load_tasks()
+    profile = load_energy()
+    incomplete = [
+        t for t in tasks
+        if t["status"] not in ("completed", "cancelled")
+        and not t.get("has_subtasks", False)
+    ]
+    sorted_incomplete, cycle_detected = topological_sort(incomplete)
+    boss_tasks = find_boss_tasks(sorted_incomplete)
+    adjusted_list, total_adjusted, adjustment_active = build_adjusted_task_list(
+        sorted_incomplete, profile, sort_by_priority=False
+    )
+    for entry in adjusted_list:
+        _annotate_boss_info(entry, boss_tasks)
+
+    daily_limit_minutes = int(profile.get("daily_limit_hours", 8.0) * 60)
+    overload = total_adjusted > daily_limit_minutes
+
+    day_start = args.day_start or "09:00"
+    day_end = args.day_end or "18:00"
+    try:
+        sh, sm = map(int, day_start.split(":"))
+        eh, em = map(int, day_end.split(":"))
+    except (ValueError, AttributeError):
+        sh, sm = 9, 0
+        eh, em = 18, 0
+
+    # Create PDF
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.add_font('zh', '', font_path)
+    pdf.add_font('zh', 'B', font_path)
+    pdf.add_page()
+
+    # Title
+    pdf.set_font('zh', 'B', 18)
+    pdf.cell(0, 12, '📋 今日时间规划', new_x="LMARGIN", new_y="NEXT", align='C')
+    pdf.ln(2)
+
+    # Date
+    pdf.set_font('zh', '', 9)
+    pdf.set_text_color(102, 102, 102)
+    pdf.cell(0, 6, f"生成日期: {datetime.now().strftime('%Y-%m-%d %H:%M')}", new_x="LMARGIN", new_y="NEXT", align='C')
+    pdf.ln(4)
+
+    # Summary info
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font('zh', '', 9)
+    info_lines = [
+        f"时间范围: {day_start} - {day_end}",
+        f"修正后总耗时: {total_adjusted} 分钟 ({total_adjusted / 60:.1f} 小时)",
+        f"每日上限: {daily_limit_minutes} 分钟 ({profile.get('daily_limit_hours', 8.0)} 小时)",
+    ]
+    if adjustment_active:
+        info_lines.append("⚠ 已启用精力偏差修正")
+    if cycle_detected:
+        info_lines.append("⚠ 检测到循环依赖")
+    for line in info_lines:
+        pdf.cell(0, 5, line, new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    # Overload warning
+    if overload:
+        pdf.set_font('zh', 'B', 10)
+        pdf.set_text_color(255, 0, 0)
+        pdf.cell(0, 6, f"⚠ 过载预警：总耗时超出每日上限 {total_adjusted - daily_limit_minutes} 分钟", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(3)
+
+    # Time block table
+    col_widths = [35, 65, 18, 28, 24]  # 时间, 任务, 优先级, Boss标记, 修正后
+    headers = ["时间", "任务", "优先级", "Boss标记", "修正后"]
+    pdf.set_fill_color(240, 240, 240)
+    pdf.set_font('zh', 'B', 9)
+    for i, (h, w) in enumerate(zip(headers, col_widths)):
+        pdf.cell(w, 8, h, border=1, fill=True, align='C')
+    pdf.ln()
+
+    cursor = sh * 60 + sm
+    day_end_min = eh * 60 + em
+    pdf.set_font('zh', '', 9)
+
+    for at in adjusted_list:
+        dur = at["adjusted_minutes"]
+        if cursor + dur > day_end_min:
+            break
+
+        start_str = f"{cursor // 60:02d}:{cursor % 60:02d}"
+        end_str = f"{(cursor + dur) // 60:02d}:{(cursor + dur) % 60:02d}"
+        time_slot = f"{start_str} - {end_str}"
+
+        is_boss = at.get("is_boss", False)
+        boss_mark = "🐉 Boss任务" if is_boss else ("🔒 被阻塞" if at.get("blocked_by_boss") else "-")
+        adjusted_str = f"{at['adjusted_minutes']}'"
+
+        is_bold = is_boss or overload
+        font_style = 'B' if is_bold else ''
+        pdf.set_font('zh', font_style, 9)
+
+        row_data = [time_slot, at["title"], at["priority"], boss_mark, adjusted_str]
+        for val, w in zip(row_data, col_widths):
+            if overload and not is_boss:
+                pdf.set_text_color(255, 0, 0)
+            pdf.cell(w, 7, str(val)[:30], border=1, align='C' if val != at["title"] else 'L')
+            pdf.set_text_color(0, 0, 0)
+        pdf.ln()
+        cursor += dur
+
+    # Output
+    output = args.output or _generate_pdf_filename("plan")
+    if not output.endswith(".pdf"):
+        output += ".pdf"
+    pdf.output(output)
+    print(json.dumps({"exported": output, "type": "plan_pdf"}, ensure_ascii=False))
+
+
 def cmd_export(args):
-    """Export data to a Word (.docx) file."""
+    """Export data to a Word (.docx) file or PDF."""
+    # PDF path for plan type
+    if getattr(args, "pdf", False):
+        if args.type != "plan":
+            print(json.dumps({
+                "error": "--pdf 目前仅支持 plan 类型，其他类型请使用 docx 导出后再转换"
+            }, ensure_ascii=False))
+            sys.exit(1)
+        _export_plan_pdf(args)
+        return
+
     _check_docx()
 
     if args.type == "plan":
@@ -1998,6 +2204,7 @@ def main():
     p_plan.add_argument("--day-end", default="18:00")
     p_plan.add_argument("--force", action="store_true")
     p_plan.add_argument("--dynamic", action="store_true", help="Add next_best suggestion to output")
+    p_plan.add_argument("--quick", action="store_true", help="Skip overload confirmation, auto-force if overloaded")
 
     # review
     p_rev = sub.add_parser("review", help="Record actual time and update energy profile")
@@ -2048,6 +2255,8 @@ def main():
                           help="(仅 list) 按状态筛选任务")
     p_export.add_argument("--day-start", default=None, help="(仅 plan) 开始时间，如 09:00")
     p_export.add_argument("--day-end", default=None, help="(仅 plan) 结束时间，如 18:00")
+    p_export.add_argument("--pdf", action="store_true", dest="pdf", default=False,
+                          help="(仅 plan) 导出为 PDF 文件（需要 fpdf2 库）")
 
     # routine (Module 十四)
     p_routine = sub.add_parser("routine", help="Manage routine/recurring tasks")
