@@ -30,9 +30,63 @@ import sys
 import uuid
 from datetime import datetime, date, timedelta
 
-TASKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.json")
-ENERGY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "energy_profile.json")
-ACHIEVEMENTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "achievements.json")
+SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(SKILL_DIR, ".timeplanner_config.json")
+
+_DEFAULT_TASKS_FILE = os.path.join(SKILL_DIR, "tasks.json")
+_DEFAULT_ENERGY_FILE = os.path.join(SKILL_DIR, "energy_profile.json")
+_DEFAULT_ACHIEVEMENTS_FILE = os.path.join(SKILL_DIR, "achievements.json")
+
+_config_cache = None  # cached config dict, call load_config() to refresh
+
+
+def load_config():
+    """Load .timeplanner_config.json, return dict with defaults."""
+    global _config_cache
+    if _config_cache is not None:
+        return _config_cache
+    if not os.path.exists(CONFIG_FILE):
+        _config_cache = {}
+        return _config_cache
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            _config_cache = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        _config_cache = {}
+    if not isinstance(_config_cache, dict):
+        _config_cache = {}
+    return _config_cache
+
+
+def save_config(config):
+    """Persist config dict to .timeplanner_config.json."""
+    global _config_cache
+    _config_cache = config
+    tmp = CONFIG_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, CONFIG_FILE)
+
+
+def get_data_dir():
+    """Return the configured data directory, or the skill dir if not set."""
+    config = load_config()
+    dd = config.get("data_dir")
+    if dd and os.path.isdir(dd):
+        return dd
+    return SKILL_DIR
+
+
+def _tasks_path():
+    return os.path.join(get_data_dir(), "tasks.json")
+
+
+def _energy_path():
+    return os.path.join(get_data_dir(), "energy_profile.json")
+
+
+def _achievements_path():
+    return os.path.join(get_data_dir(), "achievements.json")
 
 PRIORITY_WEIGHT = {"high": 3, "medium": 2, "low": 1}
 VALID_STATUSES = {"pending", "in_progress", "completed", "cancelled"}
@@ -66,10 +120,11 @@ ACHIEVEMENT_MAP = {a["id"]: a for a in ALL_ACHIEVEMENTS}
 # ── task data ──────────────────────────────────────────────────────────────
 
 def load_tasks():
-    if not os.path.exists(TASKS_FILE):
+    path = _tasks_path()
+    if not os.path.exists(path):
         return []
     try:
-        with open(TASKS_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data.get("tasks", [])
     except (json.JSONDecodeError, IOError) as e:
@@ -78,10 +133,11 @@ def load_tasks():
 
 
 def save_tasks(tasks):
-    tmp = TASKS_FILE + ".tmp"
+    path = _tasks_path()
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"tasks": tasks}, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, TASKS_FILE)
+    os.replace(tmp, path)
 
 
 def generate_id():
@@ -209,7 +265,8 @@ def merge_routines_into_plan(normal_entries, routine_entries, day_start, day_end
 # ── energy profile data ────────────────────────────────────────────────────
 
 def load_energy():
-    if not os.path.exists(ENERGY_FILE):
+    path = _energy_path()
+    if not os.path.exists(path):
         return {
             "daily_limit_hours": 8.0,
             "style": "default",
@@ -221,7 +278,7 @@ def load_energy():
             "reviews": [],
         }
     try:
-        with open(ENERGY_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             profile = json.load(f)
     except (json.JSONDecodeError, IOError) as e:
         print(json.dumps({"error": f"energy_profile.json 文件损坏或无法读取: {e}"}, ensure_ascii=False), file=sys.stderr)
@@ -241,10 +298,11 @@ def load_energy():
 
 
 def save_energy(profile):
-    tmp = ENERGY_FILE + ".tmp"
+    path = _energy_path()
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(profile, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, ENERGY_FILE)
+    os.replace(tmp, path)
 
 
 def get_adjusted_minutes(task, profile):
@@ -274,7 +332,8 @@ def get_adjusted_minutes(task, profile):
 # ── achievements data ──────────────────────────────────────────────────────
 
 def load_achievements():
-    if not os.path.exists(ACHIEVEMENTS_FILE):
+    path = _achievements_path()
+    if not os.path.exists(path):
         return {
             "achievements": [],
             "stats": {
@@ -287,7 +346,7 @@ def load_achievements():
             },
         }
     try:
-        with open(ACHIEVEMENTS_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, IOError) as e:
         print(json.dumps({"error": f"achievements.json 文件损坏或无法读取: {e}"}, ensure_ascii=False), file=sys.stderr)
@@ -307,10 +366,11 @@ def load_achievements():
 
 
 def save_achievements(data):
-    tmp = ACHIEVEMENTS_FILE + ".tmp"
+    path = _achievements_path()
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, ACHIEVEMENTS_FILE)
+    os.replace(tmp, path)
 
 
 def update_streak(ach_data, today_str):
@@ -1228,8 +1288,9 @@ def cmd_deps(args):
 
 
 def cmd_config(args):
-    """Show or set config (style, etc.) stored in energy_profile.json."""
+    """Show or set config (style, data_dir, etc.) stored in .timeplanner_config.json and energy_profile.json."""
     profile = load_energy()
+    config = load_config()
 
     if args.set_style is not None:
         style = args.set_style
@@ -1246,11 +1307,57 @@ def cmd_config(args):
             "previous": old_style,
             "updated": True,
         }, ensure_ascii=False, indent=2))
+    elif args.set_data_dir is not None:
+        new_dir = args.set_data_dir
+        if not os.path.isdir(new_dir):
+            print(json.dumps({
+                "error": f"目录不存在或无法访问: {new_dir}",
+            }, ensure_ascii=False))
+            sys.exit(1)
+        old_dir = config.get("data_dir") or SKILL_DIR
+        config["data_dir"] = new_dir
+        save_config(config)
+        # force reload on next access
+        load_config()
+        print(json.dumps({
+            "data_dir": new_dir,
+            "previous": old_dir,
+            "updated": True,
+            "note": "数据文件将从新目录读写。如果新目录中没有 tasks.json 等文件，将自动创建。",
+        }, ensure_ascii=False, indent=2))
+    elif args.show_data_dir:
+        data_dir = get_data_dir()
+        print(json.dumps({
+            "data_dir": data_dir,
+            "is_custom": "data_dir" in config,
+            "default_dir": SKILL_DIR,
+        }, ensure_ascii=False, indent=2))
+    elif args.reset_data_dir:
+        if "data_dir" in config:
+            old_dir = config.pop("data_dir")
+            save_config(config)
+            # force reload
+            load_config()
+            print(json.dumps({
+                "data_dir": SKILL_DIR,
+                "previous": old_dir,
+                "reset": True,
+                "note": "已恢复默认数据目录",
+            }, ensure_ascii=False, indent=2))
+        else:
+            print(json.dumps({
+                "data_dir": SKILL_DIR,
+                "note": "当前已是默认数据目录，无需重置",
+            }, ensure_ascii=False, indent=2))
     else:
+        data_dir = get_data_dir()
         print(json.dumps({
             "style": profile.get("style", "default"),
             "daily_limit_hours": profile.get("daily_limit_hours", 8.0),
             "total_reviews": profile.get("total_reviews", 0),
+            "data_dir": data_dir,
+            "is_custom_data_dir": "data_dir" in config,
+            "default_dir": SKILL_DIR,
         }, ensure_ascii=False, indent=2))
 
 
@@ -2225,9 +2332,15 @@ def main():
     p_deps.add_argument("--remove", default=None, help="Remove a dependency (task ID)")
 
     # config
-    p_cfg = sub.add_parser("config", help="Show or set config (style, etc.)")
+    p_cfg = sub.add_parser("config", help="Show or set config (style, data_dir, etc.)")
     p_cfg.add_argument("--set-style", dest="set_style", default=None, choices=VALID_STYLES,
                        help="Set conversation style")
+    p_cfg.add_argument("--set-data-dir", dest="set_data_dir", default=None,
+                       help="Set custom data directory for tasks.json, energy_profile.json, achievements.json")
+    p_cfg.add_argument("--show-data-dir", dest="show_data_dir", action="store_true",
+                       help="Show current data directory")
+    p_cfg.add_argument("--reset-data-dir", dest="reset_data_dir", action="store_true",
+                       help="Reset data directory to default (skill folder)")
 
     # predict (Module 十)
     p_pred = sub.add_parser("predict", help="Predict task duration and procrastination risk")

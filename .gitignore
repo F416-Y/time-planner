@@ -18,6 +18,15 @@ __pycache__/
 .vscode/
 .idea/
 
+# 对话记录 — 包含完整交互历史，绝对不上传
+conversation_log.md
+
+# 转录转换脚本 — 包含本地文件路径
+convert_transcript.py
+
+# 自定义配置文件 — 包含用户自定义数据目录路径
+.timeplanner_config.json
+
 # 临时文件
 *.tmp
 *.bak
