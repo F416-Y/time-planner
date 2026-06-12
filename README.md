@@ -43,6 +43,10 @@
 | **拆分大任务** | 「这个任务太大了帮我拆开」 | 自动拆成 调研→整理→输出→检查 4 阶段 |
 | **成长统计** | 「看看我的数据」 | 累计完成任务、Boss击败、连续天数 |
 | **成就系统** | 「我的成就解锁情况」 | 7 项游戏化成就追踪 |
+| **文档导出** | 「导出为 PDF」「生成 Word」 | 计划/清单/统计/成就导出为 .docx 或 PDF |
+| **例行任务** | 「加一个每天早上冥想的例行」 | 每日/每周/每月重复任务，自动打卡追踪持续天数 |
+| **图片识别** | 「帮我看看这张图里的待办」 | 从截图/照片/白板中提取任务，本地 OCR 无需联网 |
+| **工作时长** | 「把每日上限改成 6 小时」 | 自定义每日工作时长，过载保护自动调整 |
 
 ---
 
@@ -161,6 +165,9 @@ AI ：「⚔️ 小睦，游戏模式已开启。今日副本攻略准备好了�
 - 有相互依赖的复杂任务链、需要发现「卡点」的人
 - 大任务拖延症、需要自动拆分成小步骤的人
 - 喜欢游戏化激励、靠成就系统保持动力的人
+- 有每日/每周固定习惯、需要打卡追踪的人
+- 想把规划导出成 PDF/Word 打印出来贴在墙上的人
+- 习惯在白板或纸上列待办、想拍照导入的人
 
 ---
 
@@ -232,6 +239,10 @@ The core idea: **You speak in natural language. Claude handles everything behind
 | **Task splitting** | "This task is too big, break it down" | Auto-splits into 4 phases: research → organize → output → review |
 | **Stats** | "Show my stats" | Tasks completed, bosses defeated, streak days |
 | **Achievements** | "What achievements have I unlocked?" | 7 gamified achievement badges |
+| **Export** | "Export as PDF", "Generate Word doc" | Export plans, task lists, stats, and achievements to .docx or PDF |
+| **Routines** | "Add a daily morning meditation routine" | Daily/weekly/monthly recurring tasks with check-in and streak tracking |
+| **Image OCR** | "Read the tasks from this photo" | Extract tasks from screenshots, photos, or whiteboards — local processing, no internet needed |
+| **Work hours** | "Change daily limit to 6 hours" | Customize daily work hour limit, overload protection adapts automatically |
 
 ---
 
@@ -343,6 +354,9 @@ AI  : "⚔️ Mutsumi, game mode activated. Ready for today's quest?"
 - Anyone with complex dependency chains who needs to find blockers
 - Big-task procrastinators who need automatic breakdowns
 - People motivated by gamification and achievement systems
+- Anyone with daily/weekly habits who wants check-in tracking
+- People who want to print their plan and stick it on the wall
+- Whiteboard/notepad users who want to snap a photo and import tasks
 
 ---
 
